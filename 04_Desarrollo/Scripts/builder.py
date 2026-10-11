@@ -17,6 +17,8 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from config import MASTER_FILE, SHEETS
 
 from dashboard import preparar_dashboard
+from caja import sincronizar_ventas_en_caja
+from ticket import preparar_ticket
 from ventas_excel import procesar_todas_las_ventas
 
 
@@ -24,10 +26,10 @@ from ventas_excel import procesar_todas_las_ventas
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.1.5"
+BUILD_VERSION = "0.3.6"
 
 BUILD_NAME = (
-    "MVP 0.1.5 - Ventas + Ofertas automáticas"
+    "Build 0.3.6 - Ventas + Ticket + Caja"
 )
 
 MAX_ROWS = 500
@@ -660,7 +662,10 @@ def setup_sales(
         "TipoAplicado",
         "MotivoPrecio",
         "OfertaID",
-        "OfertaNombre"
+        "OfertaNombre",
+        "PrecioEspecialID",
+        "TicketID",
+        "_TicketLineaKey"
     ]
 
     set_headers(
@@ -690,25 +695,34 @@ def setup_sales(
 
         # ----------------------------------------------------
         # Fecha
-        # ----------------------------------------------------
-
-        ws.cell(
-            row,
-            2
-        ).value = (
-            f'=IF(A{row}="","",TODAY())'
-        )
+        # Fecha/hora calculadas se conservan después de persistirse
+        # por Python. Así no cambian en cada reconstrucción del libro.
+        date_cell = ws.cell(row, 2)
+        if (
+            date_cell.value in (None, "")
+            or (
+                isinstance(date_cell.value, str)
+                and date_cell.value.startswith("=")
+            )
+        ):
+            date_cell.value = (
+                f'=IF(A{row}="","",TODAY())'
+            )
 
         # ----------------------------------------------------
         # Hora
         # ----------------------------------------------------
-
-        ws.cell(
-            row,
-            3
-        ).value = (
-            f'=IF(A{row}="","",NOW())'
-        )
+        time_cell = ws.cell(row, 3)
+        if (
+            time_cell.value in (None, "")
+            or (
+                isinstance(time_cell.value, str)
+                and time_cell.value.startswith("=")
+            )
+        ):
+            time_cell.value = (
+                f'=IF(A{row}="","",NOW())'
+            )
 
         # ----------------------------------------------------
         # ClienteID interno
@@ -964,6 +978,16 @@ def setup_sales(
         )
 
         # ----------------------------------------------------
+        # Clave de cada línea de ticket.
+        # Solo cuenta ventas aprobadas para que una línea rechazada no
+        # deje huecos en el detalle de una compra agrupada.
+        ws.cell(row, 24).value = (
+            f'=IF(A{row}="","",'
+            f'IF(Q{row}<>"OK","",'
+            f'IF(W{row}="",A{row}&"|1",'
+            f'W{row}&"|"&COUNTIFS($W$2:W{row},W{row},$Q$2:Q{row},"OK"))))'
+        )
+
         # Formatos
         # ----------------------------------------------------
 
@@ -1036,7 +1060,7 @@ def setup_sales(
     ensure_table(
         ws,
         "VentasTable",
-        "A1:U501"
+        "A1:X501"
     )
 
     for column, width in {
@@ -1067,6 +1091,9 @@ def setup_sales(
         "S": 32,
         "T": 16,
         "U": 28,
+        "V": 20,
+        "W": 24,
+        "X": 24,
 
     }.items():
 
@@ -1082,6 +1109,10 @@ def setup_sales(
     ws.column_dimensions[
         "P"
     ].hidden = True
+
+    # V y X son columnas técnicas; W permite agrupar cortes por ticket.
+    ws.column_dimensions["V"].hidden = True
+    ws.column_dimensions["X"].hidden = True
 
     ws.freeze_panes = "A2"
 
@@ -1376,7 +1407,10 @@ def validate_before_save(
         "TipoAplicado",
         "MotivoPrecio",
         "OfertaID",
-        "OfertaNombre"
+        "OfertaNombre",
+        "PrecioEspecialID",
+        "TicketID",
+        "_TicketLineaKey"
     ]
 
     actual_headers = [
@@ -1404,39 +1438,25 @@ def validate_before_save(
         "05_VENTAS"
     ]
 
-    formula_cells = [
-        "A2",
-        "B2",
-        "C2",
-        "H2",
-        "I2",
-        "J2",
-        "K2",
-        "O2",
-        "P2",
-        "Q2"
-    ]
+    # A y X se mantienen como fórmulas. Las columnas H:Q
+    # pueden ser valores persistidos al procesar ventas con Python.
+    for address in ("A2", "X2"):
+        value = sales[address].value
+        if not isinstance(value, str) or not value.startswith("="):
+            raise RuntimeError(f"Fórmula faltante: 05_VENTAS!{address}")
 
-    for address in formula_cells:
-
-        value = sales[
-            address
-        ].value
-
-        if (
-            not isinstance(
-                value,
-                str
-            )
-            or not value.startswith(
-                "="
-            )
-        ):
-
-            raise RuntimeError(
-                f"Fórmula faltante: "
-                f"05_VENTAS!{address}"
-            )
+    row_has_data = any(
+        sales.cell(2, column).value not in (None, "")
+        for column in (4, 6, 7)
+    )
+    if row_has_data:
+        if sales["Q2"].value in (None, ""):
+            raise RuntimeError("05_VENTAS!Q2 no tiene estado de procesamiento.")
+    else:
+        for address in ("B2", "C2", "H2", "I2", "J2", "K2", "O2", "P2", "Q2"):
+            value = sales[address].value
+            if not isinstance(value, str) or not value.startswith("="):
+                raise RuntimeError(f"Fórmula faltante: 05_VENTAS!{address}")
 
     # Validaciones
     if len(
@@ -1500,6 +1520,26 @@ def validate_before_save(
                 f"Dashboard!{address} "
                 f"no tiene fórmula válida."
             )
+
+    # Ticket: verificar encabezados de detalle y fórmulas.
+    ticket = workbook["06_TICKET"]
+    if [ticket.cell(8, column).value for column in range(1, 5)] != [
+        "Corte", "Kg", "Precio por kg", "Importe"
+    ]:
+        raise RuntimeError("06_TICKET: encabezados de detalle incorrectos.")
+    for address in ("A9", "B9", "C9", "D9", "D39"):
+        value = ticket[address].value
+        if not isinstance(value, str) or not value.startswith("="):
+            raise RuntimeError(f"06_TICKET!{address}: fórmula faltante.")
+
+    # Caja: validar estructura sin borrar movimientos existentes.
+    caja = workbook["07_CAJA"]
+    caja_headers = [
+        "MovimientoID", "Fecha", "Tipo", "Concepto", "ReferenciaVenta",
+        "MedioPago", "Ingreso", "Egreso", "Saldo", "Origen",
+    ]
+    if [caja.cell(1, column).value for column in range(1, 11)] != caja_headers:
+        raise RuntimeError("07_CAJA: encabezados incorrectos.")
 
     # Version
     version = workbook[
@@ -1578,6 +1618,13 @@ def atomic_save(
         parents=True,
         exist_ok=True
     )
+
+    # Forzar recálculo de fórmulas auxiliares al abrir en Excel.
+    calculation = getattr(workbook, "calculation", None)
+    if calculation is not None:
+        calculation.fullCalcOnLoad = True
+        calculation.forceFullCalc = True
+        calculation.calcMode = "auto"
 
     token = (
         f"{BUILD_VERSION}-"
@@ -1738,7 +1785,7 @@ def main():
     )
 
     print(
-        "BUILD 0.1.5"
+        "BUILD 0.3.6"
     )
 
     print(
@@ -1752,7 +1799,7 @@ def main():
     )
 
     print(
-        "[1/7] Parámetros..."
+        "[1/9] Parámetros..."
     )
 
     setup_parameters(
@@ -1760,7 +1807,7 @@ def main():
     )
 
     print(
-        "[2/7] Catálogos..."
+        "[2/9] Catálogos..."
     )
 
     setup_catalogs(
@@ -1768,7 +1815,7 @@ def main():
     )
 
     print(
-        "[3/7] Clientes..."
+        "[3/9] Clientes..."
     )
 
     setup_clients(
@@ -1776,7 +1823,7 @@ def main():
     )
 
     print(
-        "[4/7] Productos..."
+        "[4/9] Productos..."
     )
 
     setup_products(
@@ -1784,7 +1831,7 @@ def main():
     )
 
     print(
-        "[5/7] Ventas..."
+        "[5/9] Ventas..."
     )
 
     setup_sales(
@@ -1792,7 +1839,7 @@ def main():
     )
 
     print(
-        "[6/7] Dashboard..."
+        "[6/9] Dashboard..."
     )
 
     preparar_dashboard(
@@ -1812,7 +1859,7 @@ def main():
     # ========================================================
 
     print(
-        "[7/7] Integrando motor comercial..."
+        "[7/9] Integrando motor comercial..."
     )
 
     resultados = (
@@ -1825,6 +1872,13 @@ def main():
         f"Ventas procesadas: "
         f"{len(resultados)}"
     )
+
+    print("Sincronizando ventas con Caja...")
+    cash_result = sincronizar_ventas_en_caja(workbook)
+    print(f"Caja: {cash_result}")
+
+    print("Preparando Ticket...")
+    preparar_ticket(workbook)
 
     print()
     print(
@@ -1865,11 +1919,11 @@ def main():
     print()
 
     print(
-        "MVP 0.1.5 INTEGRADO"
+        "BUILD 0.3.6 INTEGRADO"
     )
 
     print(
-        "Ventas + Ofertas + Dashboard: OK"
+        "Ventas + Ticket + Caja + Ofertas + Dashboard: OK"
     )
 
     print()

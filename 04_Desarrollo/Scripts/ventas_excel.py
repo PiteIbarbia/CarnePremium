@@ -4,10 +4,6 @@ from datetime import datetime
 
 from motor_comercial import determinar_precio_venta
 
-from motor_comercial import (
-    determinar_precio_venta
-)
-
 
 STATUS_OK = "OK"
 
@@ -75,10 +71,24 @@ def procesar_venta_excel(
         fila,
         2
     ).value
+    hora_venta = ws.cell(
+        fila,
+        3
+    ).value
+    ahora = datetime.now()
 
-    if not fecha_venta:
-
-        fecha_venta = datetime.now()
+    # Fijar fecha y hora al procesar para que no cambien con TODAY/NOW.
+    if (
+        fecha_venta in (None, "")
+        or (isinstance(fecha_venta, str) and fecha_venta.startswith("="))
+    ):
+        fecha_venta = ahora
+        ws.cell(fila, 2).value = fecha_venta
+    if (
+        hora_venta in (None, "")
+        or (isinstance(hora_venta, str) and hora_venta.startswith("="))
+    ):
+        ws.cell(fila, 3).value = ahora
 
     # ========================================================
     # MOTOR COMERCIAL
@@ -101,6 +111,15 @@ def procesar_venta_excel(
         "estado"
     )
 
+    medio_pago = ws.cell(fila, 12).value
+    if estado == STATUS_OK and not str(medio_pago or "").strip():
+        estado = "MEDIO DE PAGO REQUERIDO"
+        resultado["estado"] = estado
+        ws.cell(fila, 17).value = estado
+        for columna in (8, 9, 10, 11, 15, 16, 18, 19, 20, 21, 22):
+            ws.cell(fila, columna).value = None
+        return resultado
+
     # ========================================================
     # ERROR
     # ========================================================
@@ -115,7 +134,7 @@ def procesar_venta_excel(
         # Limpiar campos comerciales
         for columna in range(
             18,
-            22
+            23
         ):
 
             ws.cell(
@@ -268,6 +287,14 @@ def procesar_venta_excel(
         21
     ).value = resultado.get(
         "oferta_nombre"
+    )
+
+    # ID del precio especial aplicado (columna V).
+    ws.cell(
+        fila,
+        22
+    ).value = resultado.get(
+        "precio_especial_id"
     )
 
     # ========================================================

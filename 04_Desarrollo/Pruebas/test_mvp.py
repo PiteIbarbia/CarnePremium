@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.1.5"
+EXPECTED_VERSION = "0.3.6"
 
 EXPECTED_BUILD_NAME = (
-    "MVP 0.1.5 - Ofertas automáticas en Ventas"
+    "Build 0.3.6 - Ventas + Ticket + Caja"
 )
 
 # ============================================================
@@ -566,7 +566,10 @@ def main():
             "TipoAplicado",
             "MotivoPrecio",
             "OfertaID",
-            "OfertaNombre"
+            "OfertaNombre",
+            "PrecioEspecialID",
+            "TicketID",
+            "_TicketLineaKey"
         ]
 
         actual_sales_headers = [
@@ -602,19 +605,18 @@ def main():
         # Fórmulas críticas
         # ----------------------------------------------------
 
-        formula_cells = [
+        formula_cells = ["A2", "X2"]
 
-            "A2",
-            "B2",
-            "C2",
-            "H2",
-            "I2",
-            "J2",
-            "K2",
-            "O2",
-            "P2",
-            "Q2"
-        ]
+        row_has_data = any(
+            sales.cell(2, column).value not in (None, "")
+            for column in (4, 6, 7)
+        )
+        if not row_has_data:
+            formula_cells.extend(
+                ["B2", "C2", "H2", "I2", "J2", "K2", "O2", "P2", "Q2"]
+            )
+        elif sales["Q2"].value in (None, ""):
+            fail("05_VENTAS!Q2 no contiene el estado de procesamiento.")
 
         for address in formula_cells:
 
@@ -672,6 +674,19 @@ def main():
             "Ventas: OK"
         )
 
+        ticket = workbook["06_TICKET"]
+        if [ticket.cell(8, column).value for column in range(1, 5)] != [
+            "Corte", "Kg", "Precio por kg", "Importe"
+        ]:
+            fail("06_TICKET: faltan encabezados de detalle.")
+
+        caja_headers = [
+            "MovimientoID", "Fecha", "Tipo", "Concepto", "ReferenciaVenta",
+            "MedioPago", "Ingreso", "Egreso", "Saldo", "Origen",
+        ]
+        caja = workbook["07_CAJA"]
+        if [caja.cell(1, column).value for column in range(1, 11)] != caja_headers:
+            fail("07_CAJA: encabezados incorrectos.")
 
         # ====================================================
         # DASHBOARD
@@ -738,7 +753,7 @@ def main():
         )
 
         print(
-            "OK: MVP 0.1.5 VALIDADO"
+            "OK: BUILD 0.3.6 VALIDADO"
         )
 
         print(
@@ -750,7 +765,7 @@ def main():
         )
 
         print(
-            "Versión 0.1.5: OK"
+            "Versión 0.3.6: OK"
         )
 
         print(
