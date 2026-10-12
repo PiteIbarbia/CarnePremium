@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from motor_comercial import determinar_precio_venta
+from motor_comercial import determinar_precio_venta, find_client
 
 
 STATUS_OK = "OK"
@@ -336,49 +336,82 @@ def procesar_venta_excel(
     return resultado
 
 
+def procesar_cobro_excel(workbook, fila: int):
+    """Valida y persiste un cobro de saldo anterior ingresado desde 05_VENTAS."""
+    ws = workbook["05_VENTAS"]
+    cliente_nombre = ws.cell(fila, 4).value
+    medio_pago = str(ws.cell(fila, 12).value or "").strip()
+    importe_cobrado = ws.cell(fila, 23).value
+    fecha = ws.cell(fila, 2).value
+    hora = ws.cell(fila, 3).value
+    ahora = datetime.now()
+
+    if fecha in (None, "") or (isinstance(fecha, str) and fecha.startswith("=")):
+        fecha = ahora
+        ws.cell(fila, 2).value = fecha
+    if hora in (None, "") or (isinstance(hora, str) and hora.startswith("=")):
+        ws.cell(fila, 3).value = ahora
+
+    try:
+        importe_cobrado = float(importe_cobrado)
+    except (TypeError, ValueError):
+        importe_cobrado = None
+
+    client = find_client(workbook, cliente_nombre)
+    if client is None:
+        estado = "CLIENTE NO ENCONTRADO"
+    elif str(client.get("estado") or "").strip().casefold() != "activo":
+        estado = "CLIENTE INACTIVO"
+    elif importe_cobrado is None or importe_cobrado <= 0:
+        estado = "IMPORTE COBRO INVALIDO"
+    elif not medio_pago:
+        estado = "MEDIO DE PAGO REQUERIDO"
+    elif medio_pago.casefold().replace(" ", "") == "cuentacorriente":
+        estado = "COBRO NO VÁLIDO PARA CUENTA CORRIENTE"
+    else:
+        estado = "COBRO OK"
+
+    # Las filas COBRO no son ventas de carne; limpiar resultados comerciales
+    # para evitar que queden valores de una fila reutilizada.
+    for columna in (8, 9, 10, 11, 16, 18, 19, 20, 21, 22):
+        ws.cell(fila, columna).value = None
+    if client is not None:
+        ws.cell(fila, 15).value = client.get("id")
+    else:
+        ws.cell(fila, 15).value = None
+    ws.cell(fila, 17).value = estado
+    ws.cell(fila, 23).number_format = '$ #,##0.00'
+    return {
+        "estado": estado,
+        "tipo_registro": "COBRO",
+        "importe_cobrado": importe_cobrado,
+        "cliente": cliente_nombre,
+    }
+
+
 def procesar_todas_las_ventas(
     workbook,
     fila_inicio=2,
     fila_fin=501
 ):
-    """
-    Procesa todas las ventas no vacías.
-    """
-
+    """Procesa ventas de carne y cobros de saldo ingresados en 05_VENTAS."""
     resultados = []
+    ws = workbook["05_VENTAS"]
 
-    ws = workbook[
-        "05_VENTAS"
-    ]
+    for fila in range(fila_inicio, fila_fin + 1):
+        cliente = ws.cell(fila, 4).value
+        producto = ws.cell(fila, 6).value
+        tipo_registro = str(ws.cell(fila, 27).value or "").strip().upper()
 
-    for fila in range(
-        fila_inicio,
-        fila_fin + 1
-    ):
-
-        cliente = ws.cell(
-            fila,
-            4
-        ).value
-
-        producto = ws.cell(
-            fila,
-            6
-        ).value
-
-        if not cliente and not producto:
-
+        if tipo_registro == "COBRO":
+            if cliente or ws.cell(fila, 23).value not in (None, ""):
+                resultados.append(procesar_cobro_excel(workbook, fila))
             continue
 
-        resultado = (
-            procesar_venta_excel(
-                workbook,
-                fila
-            )
-        )
+        if not cliente and not producto:
+            continue
 
-        resultados.append(
-            resultado
-        )
+        resultado = procesar_venta_excel(workbook, fila)
+        resultados.append(resultado)
 
     return resultados
