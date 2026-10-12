@@ -91,27 +91,36 @@ def _next_movement_id(ws, movement_col):
 
 def sincronizar_ventas_en_caja(workbook):
     """
-    Sincroniza ventas aprobadas con Caja de forma idempotente.
-    Cuenta Corriente queda fuera de ingresos cobrados.
+    Registra en Caja solo importes realmente cobrados en PagoRecibido (W).
+    Las ventas a Cuenta Corriente sin cobro no son ingresos de caja.
     """
     cash = preparar_caja(workbook)
     sales = workbook["05_VENTAS"]
     sc = _column_map(sales)
     cc = _column_map(cash)
-    required = ["VentaID", "Fecha", "Cliente", "Producto", "Importe", "MedioPago", "EstadoVenta"]
+    required = [
+        "VentaID", "Fecha", "Cliente", "_ClienteID", "Producto",
+        "Importe", "PagoRecibido", "MedioPago", "EstadoVenta",
+    ]
     missing = [x for x in required if x not in sc]
     if missing:
         raise RuntimeError("05_VENTAS: faltan columnas para Caja: " + ", ".join(missing))
 
     expected = {}
+    known_sales = set()
     for row in range(2, min(MAX_SALES_ROW, sales.max_row) + 1):
-        if _text(sales.cell(row, sc["EstadoVenta"]).value).upper() != "OK":
+        status = _text(sales.cell(row, sc["EstadoVenta"]).value).upper()
+        if status != "OK":
             continue
+        ref = _sale_reference(sales, row, sc)
+        known_sales.add(ref)
         client = _text(sales.cell(row, sc["Cliente"]).value)
         product = _text(sales.cell(row, sc["Producto"]).value)
-        amount = _number(sales.cell(row, sc["Importe"]).value)
+        client_id = _text(sales.cell(row, sc["_ClienteID"]).value)
+        paid = _number(sales.cell(row, sc["PagoRecibido"]).value)
         payment = _text(sales.cell(row, sc["MedioPago"]).value)
-        if not client or not product or amount is None or amount <= 0 or not payment:
+        invoice_total = _number(sales.cell(row, sc["Importe"]).value)
+        if not client or not product or not client_id or not payment or paid is None or paid <= 0:
             continue
         if payment.casefold().replace(" ", "") == "cuentacorriente":
             continue
@@ -120,12 +129,16 @@ def sincronizar_ventas_en_caja(workbook):
             sale_date = None
         if not isinstance(sale_date, (date, datetime)):
             sale_date = datetime.now()
-        ref = _sale_reference(sales, row, sc)
+        ticket_id = f"T-{sale_date:%Y%m%d}-{client_id}"
         expected[ref] = {
-            "fecha": sale_date, "concepto": f"Venta {client} - {product}",
-            "medio_pago": payment, "importe": amount,
+            "fecha": sale_date,
+            "concepto": f"Cobro {ticket_id} - {client} / {product}",
+            "medio_pago": payment,
+            "importe": round(paid, 2),
+            "invoice_total": invoice_total or 0,
         }
 
+    # Evitar duplicados históricos para el mismo movimiento de venta.
     duplicates = []
     seen = set()
     for row in range(2, cash.max_row + 1):
@@ -147,7 +160,18 @@ def sincronizar_ventas_en_caja(workbook):
                 existing[ref] = row
 
     for ref, row in list(existing.items()):
-        if ref not in expected:
+        if ref in expected:
+            continue
+        # Si la venta aprobada sigue existiendo, ausencia de PagoRecibido no
+        # implica una salida de dinero: se neutralizan importes heredados de
+        # la versión anterior que registraba el total vendido como cobro.
+        if ref in known_sales:
+            cash.cell(row, cc["Tipo"]).value = "MIGRACION"
+            cash.cell(row, cc["Concepto"]).value = f"Sin cobro confirmado: {ref}"
+            cash.cell(row, cc["Ingreso"]).value = 0
+            cash.cell(row, cc["Egreso"]).value = 0
+            cash.cell(row, cc["Origen"]).value = "VENTA_AUTO_MIGRADA"
+        else:
             income = _number(cash.cell(row, cc["Ingreso"]).value) or 0
             cash.cell(row, cc["Tipo"]).value = "ANULACION"
             cash.cell(row, cc["Concepto"]).value = f"Anulación automática: {ref}"
@@ -186,4 +210,9 @@ def sincronizar_ventas_en_caja(workbook):
         for header in ("Ingreso", "Egreso", "Saldo"):
             cash.cell(row, cc[header]).number_format = '$ #,##0.00'
 
-    return {"agregados": added, "actualizados": updated, "movimientos": max(0, cash.max_row - 1)}
+    return {
+        "agregados": added,
+        "actualizados": updated,
+        "movimientos": max(0, cash.max_row - 1),
+        "ingresos_cobrados": round(sum(item["importe"] for item in expected.values()), 2),
+    }
