@@ -698,7 +698,8 @@ def setup_sales(
         "PagoRecibido",
         "_TicketLineaKey",
         "EstadoCobro",
-        "SaldoTicket"
+        "SaldoTicket",
+        "TipoRegistro"
     ]
 
     set_headers(
@@ -1131,6 +1132,18 @@ def setup_sales(
     ws.add_data_validation(payment_amount_validation)
     payment_amount_validation.add("W2:W501")
 
+    transaction_type_validation = DataValidation(
+        type="list",
+        formula1='"VENTA,COBRO"',
+        allow_blank=True,
+    )
+    transaction_type_validation.errorTitle = "Tipo de registro inválido"
+    transaction_type_validation.error = "Elegí VENTA o COBRO. Dejá vacío para una venta normal."
+    transaction_type_validation.promptTitle = "Tipo de registro"
+    transaction_type_validation.prompt = "VENTA: cargar corte y kilos. COBRO: cargar cliente, medio de pago e importe recibido, sin corte ni kilos."
+    ws.add_data_validation(transaction_type_validation)
+    transaction_type_validation.add("AA2:AA501")
+
     # --------------------------------------------------------
     # Tabla
     # --------------------------------------------------------
@@ -1138,7 +1151,7 @@ def setup_sales(
     ensure_table(
         ws,
         "VentasTable",
-        "A1:Z501"
+        "A1:AA501"
     )
 
     for column, width in {
@@ -1174,6 +1187,7 @@ def setup_sales(
         "X": 24,
         "Y": 22,
         "Z": 18,
+        "AA": 20,
 
     }.items():
 
@@ -1492,7 +1506,8 @@ def validate_before_save(
         "PagoRecibido",
         "_TicketLineaKey",
         "EstadoCobro",
-        "SaldoTicket"
+        "SaldoTicket",
+        "TipoRegistro"
     ]
 
     actual_headers = [
