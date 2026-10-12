@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
@@ -24,18 +25,24 @@ def _text(value):
     return str(value or "").strip()
 
 
-def _sale_reference(ws, row, columns):
-    value = ws.cell(row, columns["VentaID"]).value
-    if isinstance(value, str) and value.startswith("="):
-        return f"VEN{row - 1:06d}"
-    if value in (None, ""):
-        return f"VEN{row - 1:06d}"
-    return str(value).strip()
+def _as_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(raw[:10], fmt).date()
+            except ValueError:
+                continue
+    return None
 
 
-def _effective_ticket_id(ws, row, columns):
-    custom = _text(ws.cell(row, columns["TicketID"]).value)
-    return custom or _sale_reference(ws, row, columns)
+def _automatic_ticket_id(client_id, sale_date):
+    """Ticket único por cliente y día, sin identificador manual en Ventas."""
+    return f"T-{sale_date:%Y%m%d}-{client_id}"
 
 
 def preparar_ticket(workbook):
@@ -46,9 +53,9 @@ def preparar_ticket(workbook):
     sales = workbook["05_VENTAS"]
     columns = _column_map(sales)
     required = [
-        "VentaID", "Fecha", "Cliente", "Producto", "Kg",
+        "VentaID", "Fecha", "Cliente", "_ClienteID", "Producto", "Kg",
         "PrecioKg", "Importe", "MedioPago", "Vendedor",
-        "EstadoVenta", "TicketID", "_TicketLineaKey",
+        "EstadoVenta", "PagoRecibido", "_TicketLineaKey",
     ]
     missing = [name for name in required if name not in columns]
     if missing:
@@ -69,8 +76,12 @@ def preparar_ticket(workbook):
             continue
         if kg <= 0:
             continue
-        ticket_id = _effective_ticket_id(sales, row, columns)
-        if ticket_id and ticket_id not in seen:
+        client_id = _text(sales.cell(row, columns["_ClienteID"]).value)
+        sale_date = _as_date(sales.cell(row, columns["Fecha"]).value)
+        if not client_id or sale_date is None:
+            continue
+        ticket_id = _automatic_ticket_id(client_id, sale_date)
+        if ticket_id not in seen:
             seen.add(ticket_id)
             ticket_ids.append(ticket_id)
 
@@ -170,9 +181,10 @@ def preparar_ticket(workbook):
 
     ws.merge_cells("A42:D44")
     ws["A42"] = (
-        "Elegí el TicketID en B3. Para agrupar varios cortes, repetí el mismo "
-        "TicketID en la columna W de 05_VENTAS. Si W queda vacío, cada venta "
-        "genera su propio ticket. Ejecutá el ERP para refrescar el selector."
+        "El ticket se agrupa automáticamente por cliente y fecha. En W (PagoRecibido), "
+        "registrá el importe efectivamente cobrado; podés distribuir pagos en una o más "
+        "líneas del mismo cliente y día. EstadoCobro y SaldoTicket se calculan en Ventas. "
+        "Ejecutá el ERP para refrescar Ticket, Caja y Cuenta Corriente."
     )
     ws["A42"].alignment = Alignment(wrap_text=True, vertical="center")
     ws["A42"].font = Font(italic=True, color="666666", size=9)
