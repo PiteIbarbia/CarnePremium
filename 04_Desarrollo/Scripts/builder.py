@@ -18,6 +18,7 @@ from config import MASTER_FILE, SHEETS
 
 from dashboard import preparar_dashboard
 from caja import sincronizar_ventas_en_caja
+from cuenta_corriente import sincronizar_cuenta_corriente
 from ticket import preparar_ticket
 from ventas_excel import procesar_todas_las_ventas
 
@@ -26,10 +27,10 @@ from ventas_excel import procesar_todas_las_ventas
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.3.6"
+BUILD_VERSION = "0.4.0"
 
 BUILD_NAME = (
-    "Build 0.3.6 - Ventas + Ticket + Caja"
+    "Build 0.4.0 - Ventas + Ticket automático + Cobros + Cuenta Corriente"
 )
 
 MAX_ROWS = 500
@@ -634,6 +635,25 @@ def setup_sales(
         ws
     )
 
+    # Migración segura desde Build 0.3.6: W antes era TicketID manual.
+    # Al convertirse en PagoRecibido, quitamos identificadores textuales
+    # antiguos, conservando cantidades numéricas que ya pudieran existir.
+    legacy_ticket_column = ws.cell(1, 23).value == "TicketID"
+    if legacy_ticket_column:
+        for old_row in range(2, MAX_ROWS + 1):
+            old_value = ws.cell(old_row, 23).value
+            if old_value in (None, "") or isinstance(old_value, (int, float)):
+                continue
+            raw = str(old_value).strip().replace("$", "").replace(" ", "")
+            if "," in raw and "." in raw:
+                raw = raw.replace(".", "").replace(",", ".")
+            elif "," in raw:
+                raw = raw.replace(",", ".")
+            try:
+                float(raw)
+            except ValueError:
+                ws.cell(old_row, 23).value = None
+
     headers = [
 
         "VentaID",
@@ -664,8 +684,10 @@ def setup_sales(
         "OfertaID",
         "OfertaNombre",
         "PrecioEspecialID",
-        "TicketID",
-        "_TicketLineaKey"
+        "PagoRecibido",
+        "_TicketLineaKey",
+        "EstadoCobro",
+        "SaldoTicket"
     ]
 
     set_headers(
@@ -978,14 +1000,43 @@ def setup_sales(
         )
 
         # ----------------------------------------------------
-        # Clave de cada línea de ticket.
-        # Solo cuenta ventas aprobadas para que una línea rechazada no
-        # deje huecos en el detalle de una compra agrupada.
+        # Ticket automático por cliente y día. B puede conservar hora
+        # en el valor datetime, por eso el agrupamiento compara el día completo.
+        ticket_count = (
+            f'COUNTIFS($O$2:O{row},O{row},'
+            f'$B$2:B{row},">="&INT(B{row}),'
+            f'$B$2:B{row},"<"&INT(B{row})+1,'
+            f'$Q$2:Q{row},"OK")'
+        )
         ws.cell(row, 24).value = (
-            f'=IF(A{row}="","",'
+            f'=IF(OR(A{row}="",B{row}="",O{row}=""),"",'
             f'IF(Q{row}<>"OK","",'
-            f'IF(W{row}="",A{row}&"|1",'
-            f'W{row}&"|"&COUNTIFS($W$2:W{row},W{row},$Q$2:Q{row},"OK"))))'
+            f'"T-"&TEXT(B{row},"yyyymmdd")&"-"&O{row}&"|"&{ticket_count}))'
+        )
+
+        # ----------------------------------------------------
+        # Estado y saldo del ticket: ventas menos pagos del mismo cliente/día.
+        date_client_criteria = (
+            f'$O$2:$O$501,O{row},'
+            f'$B$2:$B$501,">="&INT(B{row}),'
+            f'$B$2:$B$501,"<"&INT(B{row})+1,'
+            f'$Q$2:$Q$501,"OK"'
+        )
+        ticket_total = f'SUMIFS($I$2:$I$501,{date_client_criteria})'
+        received_total = f'SUMIFS($W$2:$W$501,{date_client_criteria})'
+        rounded_total = f'ROUND({ticket_total},2)'
+        rounded_received = f'ROUND({received_total},2)'
+
+        ws.cell(row, 25).value = (
+            f'=IF(A{row}="","",IF(Q{row}<>"OK","",'
+            f'IF({rounded_total}<=0,"",'
+            f'IF({rounded_received}<=0,"PENDIENTE",'
+            f'IF({rounded_received}>{rounded_total},"A FAVOR",'
+            f'IF({rounded_received}={rounded_total},"PAGADO / OK","SALDO PENDIENTE"))))))'
+        )
+        ws.cell(row, 26).value = (
+            f'=IF(A{row}="","",IF(Q{row}<>"OK","",'
+            f'ROUND({ticket_total}-{received_total},2)))'
         )
 
         # Formatos
@@ -1016,6 +1067,9 @@ def setup_sales(
         ).number_format = (
             "0.0%"
         )
+        ws.cell(row, 23).number_format = '$ #,##0.00'
+        ws.cell(row, 25).alignment = Alignment(horizontal="center")
+        ws.cell(row, 26).number_format = '$ #,##0.00'
 
         ws.cell(
             row,
@@ -1053,6 +1107,19 @@ def setup_sales(
         "'02_CATALOGOS'!$C$2:$C$6"
     )
 
+    payment_amount_validation = DataValidation(
+        type="decimal",
+        operator="greaterThanOrEqual",
+        formula1="0",
+        allow_blank=True,
+    )
+    payment_amount_validation.errorTitle = "Importe de cobro inválido"
+    payment_amount_validation.error = "Ingresá un importe cobrado igual o mayor que cero."
+    payment_amount_validation.promptTitle = "Pago recibido"
+    payment_amount_validation.prompt = "Registrá aquí el importe realmente cobrado. El estado y el saldo se calculan automáticamente."
+    ws.add_data_validation(payment_amount_validation)
+    payment_amount_validation.add("W2:W501")
+
     # --------------------------------------------------------
     # Tabla
     # --------------------------------------------------------
@@ -1060,7 +1127,7 @@ def setup_sales(
     ensure_table(
         ws,
         "VentasTable",
-        "A1:X501"
+        "A1:Z501"
     )
 
     for column, width in {
@@ -1092,8 +1159,10 @@ def setup_sales(
         "T": 16,
         "U": 28,
         "V": 20,
-        "W": 24,
+        "W": 18,
         "X": 24,
+        "Y": 22,
+        "Z": 18,
 
     }.items():
 
@@ -1409,8 +1478,10 @@ def validate_before_save(
         "OfertaID",
         "OfertaNombre",
         "PrecioEspecialID",
-        "TicketID",
-        "_TicketLineaKey"
+        "PagoRecibido",
+        "_TicketLineaKey",
+        "EstadoCobro",
+        "SaldoTicket"
     ]
 
     actual_headers = [
@@ -1440,7 +1511,7 @@ def validate_before_save(
 
     # A y X se mantienen como fórmulas. Las columnas H:Q
     # pueden ser valores persistidos al procesar ventas con Python.
-    for address in ("A2", "X2"):
+    for address in ("A2", "X2", "Y2", "Z2"):
         value = sales[address].value
         if not isinstance(value, str) or not value.startswith("="):
             raise RuntimeError(f"Fórmula faltante: 05_VENTAS!{address}")
@@ -1873,11 +1944,15 @@ def main():
         f"{len(resultados)}"
     )
 
-    print("Sincronizando ventas con Caja...")
+    print("Sincronizando cobros reales con Caja...")
     cash_result = sincronizar_ventas_en_caja(workbook)
     print(f"Caja: {cash_result}")
 
-    print("Preparando Ticket...")
+    print("Sincronizando Cuenta Corriente...")
+    account_result = sincronizar_cuenta_corriente(workbook)
+    print(f"Cuenta Corriente: {account_result}")
+
+    print("Preparando Ticket automático...")
     preparar_ticket(workbook)
 
     print()
