@@ -45,6 +45,23 @@ def _automatic_ticket_id(client_id, sale_date):
     return f"T-{sale_date:%Y%m%d}-{client_id}"
 
 
+def _client_id_for_name(workbook, client_name):
+    """Resuelve un ID de cliente aun cuando la celda de ID tenga fórmula Excel."""
+    if "03_CLIENTES" not in workbook.sheetnames:
+        return ""
+    target = _text(client_name).casefold()
+    clients = workbook["03_CLIENTES"]
+    for row in range(2, min(MAX_SALES_ROW, clients.max_row) + 1):
+        name = _text(clients.cell(row, 2).value)
+        if not name or name.casefold() != target:
+            continue
+        raw_id = clients.cell(row, 1).value
+        if raw_id in (None, "") or (isinstance(raw_id, str) and raw_id.startswith("=")):
+            return f"CLI{row - 1:06d}"
+        return str(raw_id).strip()
+    return ""
+
+
 def preparar_ticket(workbook):
     """Prepara 06_TICKET y un selector con tickets de ventas aprobadas."""
     if "05_VENTAS" not in workbook.sheetnames:
@@ -76,7 +93,9 @@ def preparar_ticket(workbook):
             continue
         if kg <= 0:
             continue
-        client_id = _text(sales.cell(row, columns["_ClienteID"]).value)
+        client_id = _client_id_for_name(
+            workbook, sales.cell(row, columns["Cliente"]).value
+        )
         sale_date = _as_date(sales.cell(row, columns["Fecha"]).value)
         if not client_id or sale_date is None:
             continue
