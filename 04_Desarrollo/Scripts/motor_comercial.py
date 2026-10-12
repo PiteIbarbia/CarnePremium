@@ -203,13 +203,24 @@ def find_client(
 
         if current == target:
 
+            # Los ID de la plantilla son fórmulas de Excel. openpyxl lee el
+            # texto de la fórmula, no su resultado calculado. No copiar esa
+            # fórmula a 05_VENTAS porque sus referencias relativas cambiarían.
+            raw_id = ws.cell(row, 1).value
+            client_id = raw_id
+            if (
+                raw_id in (None, "")
+                or (
+                    isinstance(raw_id, str)
+                    and raw_id.startswith("=")
+                )
+            ):
+                client_id = f"CLI{row - 1:06d}"
+
             return {
 
                 "id":
-                    ws.cell(
-                        row,
-                        1
-                    ).value,
+                    client_id,
 
                 "nombre":
                     name,
@@ -276,13 +287,23 @@ def find_product(
 
         if current == target:
 
+            # Resolver el ID de producto si la celda contiene fórmula Excel.
+            # Nunca devolver el texto de la fórmula como si fuera un ID.
+            raw_id = ws.cell(row, 1).value
+            product_id = raw_id
+            if (
+                raw_id in (None, "")
+                or (
+                    isinstance(raw_id, str)
+                    and raw_id.startswith("=")
+                )
+            ):
+                product_id = f"PRO{row - 1:06d}"
+
             return {
 
                 "id":
-                    ws.cell(
-                        row,
-                        1
-                    ).value,
+                    product_id,
 
                 "nombre":
                     name,
