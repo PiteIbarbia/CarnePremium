@@ -152,6 +152,14 @@ def preparar_ticket(workbook):
         ws.cell(row, 3).number_format = '$ #,##0.00'
         ws.cell(row, 4).number_format = '$ #,##0.00'
 
+    # Totales del ticket: kilos e importe.
+    # La columna B es Kg; C conserva la etiqueta TOTAL y D suma los importes.
+    ws.cell(TOTAL_ROW, 2).value = f"=SUM(B{FIRST_LINE_ROW}:B{FIRST_LINE_ROW + TICKET_LINE_COUNT - 1})"
+    ws.cell(TOTAL_ROW, 2).font = Font(bold=True, color="FFFFFF")
+    ws.cell(TOTAL_ROW, 2).fill = PatternFill("solid", fgColor="7A3E13")
+    ws.cell(TOTAL_ROW, 2).number_format = "0.000"
+    ws.cell(TOTAL_ROW, 2).alignment = Alignment(horizontal="right")
+
     ws.cell(TOTAL_ROW, 3).value = "TOTAL"
     ws.cell(TOTAL_ROW, 3).font = Font(bold=True, color="FFFFFF")
     ws.cell(TOTAL_ROW, 3).fill = PatternFill("solid", fgColor="7A3E13")
