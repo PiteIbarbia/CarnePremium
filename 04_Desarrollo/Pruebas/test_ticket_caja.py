@@ -11,6 +11,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from caja import sincronizar_ventas_en_caja
 from cuenta_corriente import sincronizar_cuenta_corriente
+from motor_comercial import find_client, find_product
 from ticket import preparar_ticket
 
 
@@ -32,6 +33,18 @@ def make_workbook():
     clients.append(['=IF(B2="","","CLI"&TEXT(ROW()-1,"000000"))', "Cliente Demo"])
     clients.append(['=IF(B3="","","CLI"&TEXT(ROW()-1,"000000"))', "Cliente Cuenta"])
 
+    # IDs de cliente/producto se generan por fórmulas en Excel. openpyxl lee
+    # esas fórmulas como texto, y el motor debe resolver IDs estables por fila.
+    products = wb.create_sheet("04_PRODUCTOS")
+    products.append([
+        "ProductoID", "Producto", "Categoria", "Costo", "PrecioMinorista",
+        "PrecioMayorista", "PrecioEspecial", "Estado", "Observaciones",
+    ])
+    products.append([
+        '=IF(B2="","","PRO"&TEXT(ROW()-1,"000000"))',
+        "Asado", "Carne", 5000, 10000, 9000, 8500, "Activo", None,
+    ])
+
     wb.create_sheet("06_TICKET")
     wb.create_sheet("07_CAJA")
     wb.create_sheet("09_CTACTE")
@@ -52,6 +65,11 @@ def make_workbook():
 def main():
     wb = make_workbook()
     try:
+        # Regresión: nunca se deben copiar textos de fórmulas de ID a Ventas.
+        assert find_client(wb, "Cliente Demo")["id"] == "CLI000001"
+        assert find_client(wb, "Cliente Cuenta")["id"] == "CLI000002"
+        assert find_product(wb, "Asado")["id"] == "PRO000001"
+
         first_cash = sincronizar_ventas_en_caja(wb)
         preparar_ticket(wb)
         first_account = sincronizar_cuenta_corriente(wb)
