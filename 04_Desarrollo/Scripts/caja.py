@@ -89,56 +89,91 @@ def _next_movement_id(ws, movement_col):
     return f"MOV{largest + 1:06d}"
 
 
+def _client_id_for_name(workbook, client_name):
+    target = _text(client_name).casefold()
+    if not target or "03_CLIENTES" not in workbook.sheetnames:
+        return ""
+    clients = workbook["03_CLIENTES"]
+    for row in range(2, min(MAX_SALES_ROW, clients.max_row) + 1):
+        name = _text(clients.cell(row, 2).value)
+        if not name or name.casefold() != target:
+            continue
+        raw_id = clients.cell(row, 1).value
+        if raw_id in (None, "") or (isinstance(raw_id, str) and raw_id.startswith("=")):
+            return f"CLI{row - 1:06d}"
+        return str(raw_id).strip()
+    return ""
+
+
+def _cash_date(value):
+    if isinstance(value, (date, datetime)):
+        return value
+    return datetime.now()
+
+
 def sincronizar_ventas_en_caja(workbook):
     """
-    Registra en Caja solo importes realmente cobrados en PagoRecibido (W).
-    Las ventas a Cuenta Corriente sin cobro no son ingresos de caja.
+    Registra en Caja solo el dinero efectivamente cobrado en PagoRecibido.
+    Las ventas a cuenta corriente sin cobro no son ingresos.
+    Los cobros de deuda ingresados con TipoRegistro=COBRO sí crean ingresos.
     """
     cash = preparar_caja(workbook)
     sales = workbook["05_VENTAS"]
     sc = _column_map(sales)
     cc = _column_map(cash)
     required = [
-        "VentaID", "Fecha", "Cliente", "_ClienteID", "Producto",
-        "Importe", "PagoRecibido", "MedioPago", "EstadoVenta",
+        "VentaID", "Fecha", "Cliente", "Producto", "Importe",
+        "PagoRecibido", "MedioPago", "EstadoVenta", "TipoRegistro",
     ]
-    missing = [x for x in required if x not in sc]
+    missing = [name for name in required if name not in sc]
     if missing:
         raise RuntimeError("05_VENTAS: faltan columnas para Caja: " + ", ".join(missing))
 
     expected = {}
-    known_sales = set()
+    known_refs = set()
     for row in range(2, min(MAX_SALES_ROW, sales.max_row) + 1):
         status = _text(sales.cell(row, sc["EstadoVenta"]).value).upper()
-        if status != "OK":
+        kind = _text(sales.cell(row, sc["TipoRegistro"]).value).upper() or "VENTA"
+        if status == "OK" and kind != "COBRO":
+            ref = _sale_reference(sales, row, sc)
+            known_refs.add(ref)
+        elif status == "COBRO OK" and kind == "COBRO":
+            ref = f"COB{row - 1:06d}"
+            known_refs.add(ref)
+        else:
             continue
-        ref = _sale_reference(sales, row, sc)
-        known_sales.add(ref)
+
         client = _text(sales.cell(row, sc["Cliente"]).value)
-        product = _text(sales.cell(row, sc["Producto"]).value)
-        client_id = _text(sales.cell(row, sc["_ClienteID"]).value)
+        client_id = _client_id_for_name(workbook, client)
         paid = _number(sales.cell(row, sc["PagoRecibido"]).value)
         payment = _text(sales.cell(row, sc["MedioPago"]).value)
-        invoice_total = _number(sales.cell(row, sc["Importe"]).value)
-        if not client or not product or not client_id or not payment or paid is None or paid <= 0:
+        sale_date = _cash_date(sales.cell(row, sc["Fecha"]).value)
+        if (
+            not client or not client_id or paid is None or paid <= 0
+            or not payment
+            or payment.casefold().replace(" ", "") == "cuentacorriente"
+        ):
             continue
-        if payment.casefold().replace(" ", "") == "cuentacorriente":
-            continue
-        sale_date = sales.cell(row, sc["Fecha"]).value
-        if isinstance(sale_date, str) and sale_date.startswith("="):
-            sale_date = None
-        if not isinstance(sale_date, (date, datetime)):
-            sale_date = datetime.now()
-        ticket_id = f"T-{sale_date:%Y%m%d}-{client_id}"
+
+        if kind == "COBRO" and status == "COBRO OK":
+            concept = f"Cobro de saldo anterior - {client}"
+            ref = f"COB{row - 1:06d}"
+        else:
+            product = _text(sales.cell(row, sc["Producto"]).value)
+            if not product:
+                continue
+            ticket_id = f"T-{sale_date:%Y%m%d}-{client_id}"
+            concept = f"Cobro {ticket_id} - {client} / {product}"
+            ref = _sale_reference(sales, row, sc)
+
         expected[ref] = {
             "fecha": sale_date,
-            "concepto": f"Cobro {ticket_id} - {client} / {product}",
+            "concepto": concept,
             "medio_pago": payment,
             "importe": round(paid, 2),
-            "invoice_total": invoice_total or 0,
         }
 
-    # Evitar duplicados históricos para el mismo movimiento de venta.
+    # Evitar duplicados históricos para una misma referencia de venta/cobro.
     duplicates = []
     seen = set()
     for row in range(2, cash.max_row + 1):
@@ -162,11 +197,10 @@ def sincronizar_ventas_en_caja(workbook):
     for ref, row in list(existing.items()):
         if ref in expected:
             continue
-        # Si la venta aprobada sigue existiendo, ausencia de PagoRecibido no
-        # implica una salida de dinero: se neutralizan importes heredados de
-        # la versión anterior que registraba el total vendido como cobro.
-        if ref in known_sales:
-            cash.cell(row, cc["Tipo"]).value = "MIGRACION"
+        if ref in known_refs:
+            # No invertir el importe de una venta que sigue aprobada; neutralizar
+            # un cobro automático heredado si ahora el usuario no declara cobro.
+            cash.cell(row, cc["Tipo"]).value = "REVISION COBRO"
             cash.cell(row, cc["Concepto"]).value = f"Sin cobro confirmado: {ref}"
             cash.cell(row, cc["Ingreso"]).value = 0
             cash.cell(row, cc["Egreso"]).value = 0
@@ -187,7 +221,7 @@ def sincronizar_ventas_en_caja(workbook):
                 active[ref] = row
 
     added = updated = 0
-    for ref, sale in expected.items():
+    for ref, receipt in expected.items():
         row = active.get(ref)
         if row is None:
             row = cash.max_row + 1
@@ -196,10 +230,14 @@ def sincronizar_ventas_en_caja(workbook):
         else:
             updated += 1
         values = {
-            "Fecha": sale["fecha"], "Tipo": "INGRESO",
-            "Concepto": sale["concepto"], "ReferenciaVenta": ref,
-            "MedioPago": sale["medio_pago"], "Ingreso": sale["importe"],
-            "Egreso": 0, "Origen": "VENTA_AUTO",
+            "Fecha": receipt["fecha"],
+            "Tipo": "INGRESO",
+            "Concepto": receipt["concepto"],
+            "ReferenciaVenta": ref,
+            "MedioPago": receipt["medio_pago"],
+            "Ingreso": receipt["importe"],
+            "Egreso": 0,
+            "Origen": "VENTA_AUTO",
         }
         for header, value in values.items():
             cash.cell(row, cc[header]).value = value
