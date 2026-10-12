@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.3.6"
+EXPECTED_VERSION = "0.4.0"
 
 EXPECTED_BUILD_NAME = (
-    "Build 0.3.6 - Ventas + Ticket + Caja"
+    "Build 0.4.0 - Ventas + Ticket automático + Cobros + Cuenta Corriente"
 )
 
 # ============================================================
@@ -568,8 +568,11 @@ def main():
             "OfertaID",
             "OfertaNombre",
             "PrecioEspecialID",
-            "TicketID",
-            "_TicketLineaKey"
+            "PagoRecibido",
+            "_TicketLineaKey",
+            "EstadoCobro",
+            "SaldoTicket",
+            "TipoRegistro"
         ]
 
         actual_sales_headers = [
@@ -605,7 +608,7 @@ def main():
         # Fórmulas críticas
         # ----------------------------------------------------
 
-        formula_cells = ["A2", "X2"]
+        formula_cells = ["A2", "X2", "Y2", "Z2"]
 
         row_has_data = any(
             sales.cell(2, column).value not in (None, "")
@@ -753,7 +756,7 @@ def main():
         )
 
         print(
-            "OK: BUILD 0.3.6 VALIDADO"
+            "OK: BUILD 0.4.0 VALIDADO"
         )
 
         print(
@@ -765,7 +768,7 @@ def main():
         )
 
         print(
-            "Versión 0.3.6: OK"
+            "Versión 0.4.0: OK"
         )
 
         print(
