@@ -636,23 +636,34 @@ def setup_sales(
     )
 
     # Migración segura desde Build 0.3.6: W antes era TicketID manual.
-    # Al convertirse en PagoRecibido, quitamos identificadores textuales
-    # antiguos, conservando cantidades numéricas que ya pudieran existir.
+    # Si Caja ya tenía un cobro automático asociado a la venta, conserva su
+    # importe como PagoRecibido. No deduce el pago a partir de la venta bruta.
     legacy_ticket_column = ws.cell(1, 23).value == "TicketID"
     if legacy_ticket_column:
+        prior_cash_by_sale = {}
+        if "07_CAJA" in workbook.sheetnames:
+            old_cash = workbook["07_CAJA"]
+            old_cash_columns = {
+                str(old_cash.cell(1, col).value).strip(): col
+                for col in range(1, old_cash.max_column + 1)
+                if old_cash.cell(1, col).value not in (None, "")
+            }
+            if {"ReferenciaVenta", "Ingreso", "Origen"}.issubset(old_cash_columns):
+                for cash_row in range(2, old_cash.max_row + 1):
+                    if str(old_cash.cell(cash_row, old_cash_columns["Origen"]).value or "").strip() != "VENTA_AUTO":
+                        continue
+                    ref = str(old_cash.cell(cash_row, old_cash_columns["ReferenciaVenta"]).value or "").strip()
+                    income = old_cash.cell(cash_row, old_cash_columns["Ingreso"]).value
+                    if ref and isinstance(income, (int, float)) and income > 0:
+                        prior_cash_by_sale[ref] = float(income)
+
         for old_row in range(2, MAX_ROWS + 1):
             old_value = ws.cell(old_row, 23).value
             if old_value in (None, "") or isinstance(old_value, (int, float)):
                 continue
-            raw = str(old_value).strip().replace("$", "").replace(" ", "")
-            if "," in raw and "." in raw:
-                raw = raw.replace(".", "").replace(",", ".")
-            elif "," in raw:
-                raw = raw.replace(",", ".")
-            try:
-                float(raw)
-            except ValueError:
-                ws.cell(old_row, 23).value = None
+            sale_ref = f"VEN{old_row - 1:06d}"
+            migrated_receipt = prior_cash_by_sale.get(sale_ref)
+            ws.cell(old_row, 23).value = migrated_receipt if migrated_receipt is not None else None
 
     headers = [
 
