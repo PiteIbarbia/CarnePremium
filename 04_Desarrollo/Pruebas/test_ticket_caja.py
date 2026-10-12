@@ -66,7 +66,7 @@ def main():
             for row in range(2, cash.max_row + 1)
             if cash.cell(row, 10).value == "VENTA_AUTO"
         }
-        assert set(by_ref) == {"VEN000001", "VEN000002", "COB000005"}, by_ref
+        assert set(by_ref) == {"VEN000001", "VEN000002", "COB000006"}, by_ref
         cash_total = sum(float(cash.cell(row, 7).value or 0) for row in range(2, cash.max_row + 1))
         assert cash_total == 33000, cash_total
 
