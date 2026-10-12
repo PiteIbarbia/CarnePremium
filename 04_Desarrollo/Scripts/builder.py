@@ -1208,7 +1208,7 @@ def setup_sales(
         "P"
     ].hidden = True
 
-    # V y X son columnas técnicas; W permite agrupar cortes por ticket.
+    # V y X son técnicas; W es PagoRecibido; Y/Z muestran estado y saldo; AA distingue VENTA/COBRO.
     ws.column_dimensions["V"].hidden = True
     ws.column_dimensions["X"].hidden = True
 
