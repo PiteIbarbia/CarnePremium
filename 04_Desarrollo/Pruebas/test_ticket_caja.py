@@ -97,6 +97,7 @@ def main():
         # Editar un cobro existente actualiza el movimiento correspondiente, no crea otro.
         wb["05_VENTAS"]["W2"] = 16000
         third_cash = sincronizar_ventas_en_caja(wb)
+        sincronizar_cuenta_corriente(wb)
         assert third_cash["agregados"] == 0, third_cash
         assert cash.max_row == 4
         assert cash.cell(by_ref["VEN000001"], 7).value == 16000
