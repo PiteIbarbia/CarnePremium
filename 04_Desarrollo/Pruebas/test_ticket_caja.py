@@ -67,6 +67,8 @@ def main():
         assert listed == ["T-20261011-001", "VEN000003", "T-CTA"], listed
         assert ticket["B3"].value == "T-20261011-001"
         assert ticket["A9"].value.startswith("=IFERROR(INDEX(")
+        assert ticket["B39"].value == "=SUM(B9:B38)"
+        assert ticket["B39"].number_format == "0.000"
         assert ticket["D39"].value == "=SUM(D9:D38)"
 
         second = sincronizar_ventas_en_caja(wb)
