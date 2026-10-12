@@ -1035,7 +1035,11 @@ def setup_sales(
             f'$Q$2:$Q$501,"OK"'
         )
         ticket_total = f'SUMIFS($I$2:$I$501,{date_client_criteria})'
-        received_total = f'SUMIFS($W$2:$W$501,{date_client_criteria})'
+        received_criteria = (
+            date_client_criteria
+            + ',$L$2:$L$501,"<>Cuenta Corriente"'
+        )
+        received_total = f'SUMIFS($W$2:$W$501,{received_criteria})'
         rounded_total = f'ROUND({ticket_total},2)'
         rounded_received = f'ROUND({received_total},2)'
 
@@ -1882,7 +1886,7 @@ def main():
     )
 
     print(
-        "BUILD 0.3.6"
+        f"BUILD {BUILD_VERSION}"
     )
 
     print(
@@ -2020,11 +2024,11 @@ def main():
     print()
 
     print(
-        "BUILD 0.3.6 INTEGRADO"
+        f"BUILD {BUILD_VERSION} INTEGRADO"
     )
 
     print(
-        "Ventas + Ticket + Caja + Ofertas + Dashboard: OK"
+        "Ventas + Ticket automático + Cobros + Caja + Cuenta Corriente + Dashboard: OK"
     )
 
     print()
