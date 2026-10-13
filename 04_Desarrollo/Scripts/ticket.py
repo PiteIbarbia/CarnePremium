@@ -80,8 +80,13 @@ def preparar_ticket(workbook):
 
     ticket_ids = []
     seen = set()
+    ticket_counts = {}
+    ticket_keys_by_row = {}
+
     for row in range(2, min(MAX_SALES_ROW, sales.max_row) + 1):
         if _text(sales.cell(row, columns["EstadoVenta"]).value).upper() != "OK":
+            continue
+        if _text(sales.cell(row, columns.get("TipoRegistro", 27)).value).upper() == "COBRO":
             continue
         if not _text(sales.cell(row, columns["Cliente"]).value):
             continue
@@ -103,6 +108,15 @@ def preparar_ticket(workbook):
         if ticket_id not in seen:
             seen.add(ticket_id)
             ticket_ids.append(ticket_id)
+        group_key = (client_id, sale_date)
+        ticket_counts[group_key] = ticket_counts.get(group_key, 0) + 1
+        ticket_keys_by_row[row] = f"{ticket_id}|{ticket_counts[group_key]}"
+
+    # Escribir claves de ticket como valores, no como fórmulas de Excel.
+    # Así MATCH en 06_TICKET no depende del recálculo previo de la columna X.
+    helper_col = columns["_TicketLineaKey"]
+    for row in range(2, MAX_SALES_ROW + 1):
+        sales.cell(row, helper_col).value = ticket_keys_by_row.get(row, "")
 
     ws = workbook["06_TICKET"] if "06_TICKET" in workbook.sheetnames else workbook.create_sheet("06_TICKET")
     selected_before = _text(ws["B3"].value)
