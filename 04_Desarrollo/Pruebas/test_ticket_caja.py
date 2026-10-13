@@ -129,7 +129,7 @@ def main():
         demo_day1 = account_rows[("Cliente Demo", datetime(2026, 10, 11).date())]
         account_day1 = account_rows[("Cliente Cuenta", datetime(2026, 10, 11).date())]
         account_day2 = account_rows[("Cliente Cuenta", datetime(2026, 10, 12).date())]
-        assert account.cell(demo_day1, 9).value == 4000
+        assert account.cell(demo_day1, 9).value == 9000  # incluye los $5.000 pendientes de la venta histórica
         assert account.cell(account_day1, 9).value == 10000
         assert account.cell(account_day2, 9).value == 7000
         assert account.cell(account_day2, 10).value == "DEBE"
