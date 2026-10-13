@@ -1539,9 +1539,10 @@ def validate_before_save(
         "05_VENTAS"
     ]
 
-    # A y X se mantienen como fórmulas. Las columnas H:Q
-    # pueden ser valores persistidos al procesar ventas con Python.
-    for address in ("A2", "X2", "Y2", "Z2"):
+    # A, Y y Z se conservan como fórmulas. X (_TicketLineaKey) se
+    # materializa como texto por preparar_ticket() para que MATCH no dependa
+    # del recálculo de fórmulas recién escritas en Excel.
+    for address in ("A2", "Y2", "Z2"):
         value = sales[address].value
         if not isinstance(value, str) or not value.startswith("="):
             raise RuntimeError(f"Fórmula faltante: 05_VENTAS!{address}")
@@ -1553,6 +1554,10 @@ def validate_before_save(
     if row_has_data:
         if sales["Q2"].value in (None, ""):
             raise RuntimeError("05_VENTAS!Q2 no tiene estado de procesamiento.")
+        if str(sales["Q2"].value).strip().upper() == "OK":
+            key = sales["X2"].value
+            if not isinstance(key, str) or not key.startswith("T-") or "|" not in key:
+                raise RuntimeError("05_VENTAS!X2 no contiene una clave materializada de ticket.")
     else:
         for address in ("B2", "C2", "H2", "I2", "J2", "K2", "O2", "P2", "Q2"):
             value = sales[address].value
