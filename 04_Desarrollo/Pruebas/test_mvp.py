@@ -608,7 +608,10 @@ def main():
         # Fórmulas críticas
         # ----------------------------------------------------
 
-        formula_cells = ["A2", "X2", "Y2", "Z2"]
+        # La clave de ticket X se materializa como texto en preparar_ticket(),
+        # no debe exigirse como fórmula: así el Ticket funciona aunque Excel
+        # todavía no haya recalculado las fórmulas auxiliares.
+        formula_cells = ["A2", "Y2", "Z2"]
 
         row_has_data = any(
             sales.cell(2, column).value not in (None, "")
@@ -618,8 +621,17 @@ def main():
             formula_cells.extend(
                 ["B2", "C2", "H2", "I2", "J2", "K2", "O2", "P2", "Q2"]
             )
-        elif sales["Q2"].value in (None, ""):
-            fail("05_VENTAS!Q2 no contiene el estado de procesamiento.")
+        else:
+            if sales["Q2"].value in (None, ""):
+                fail("05_VENTAS!Q2 no contiene el estado de procesamiento.")
+            if str(sales["Q2"].value).strip().upper() == "OK":
+                ticket_key = sales["X2"].value
+                if (
+                    not isinstance(ticket_key, str)
+                    or not ticket_key.startswith("T-")
+                    or "|" not in ticket_key
+                ):
+                    fail("05_VENTAS!X2 no contiene una clave de ticket materializada.")
 
         for address in formula_cells:
 
