@@ -52,7 +52,7 @@ def make_workbook():
     rows = [
         ["VEN000001", datetime(2026, 10, 11, 10), datetime(2026, 10, 11, 10), "Cliente Demo", "Minorista", "Asado", 2, 10000, 20000, 3000, .15, "Efectivo", "Vendedor Demo", None, "CLI000001", "PRO000001", "OK", "Minorista", "Precio base", None, None, None, 15000, None, "SALDO PENDIENTE", 5000, "VENTA"],
         ["VEN000002", datetime(2026, 10, 11, 10, 5), datetime(2026, 10, 11, 10, 5), "Cliente Demo", "Minorista", "Vacío", 1.5, 10000, 15000, 2500, .1667, "Efectivo", "Vendedor Demo", None, "CLI000001", "PRO000002", "OK", "Minorista", "Precio base", None, None, None, 15000, None, "SALDO PENDIENTE", 5000, "VENTA"],
-        ["VEN000003", datetime(2026, 10, 12, 10), datetime(2026, 10, 12, 10), "Cliente Demo", "Minorista", "Bife", .5, 10000, 5000, 1000, .2, "Efectivo", "Vendedor Demo", None, "CLI000001", "PRO000003", "OK", "Minorista", "Precio base", None, None, None, None, None, "PENDIENTE", 5000, "VENTA"],
+        ["VEN000003", datetime(2024, 4, 15, 10), datetime(2024, 4, 15, 10), "Cliente Demo", "Minorista", "Bife", .5, 10000, 5000, 1000, .2, "Efectivo", "Vendedor Demo", None, "CLI000001", "PRO000003", "OK", "Minorista", "Precio base", None, None, None, None, None, "PENDIENTE", 5000, "VENTA"],
         ["VEN000004", datetime(2026, 10, 11, 10, 15), datetime(2026, 10, 11, 10, 15), "Cliente Desconocido", "Minorista", "Colita", .5, None, None, None, None, "Efectivo", "Vendedor Demo", None, None, None, "CLIENTE NO ENCONTRADO", None, None, None, None, None, None, None, None, None, "VENTA"],
         ["VEN000005", datetime(2026, 10, 11, 10, 20), datetime(2026, 10, 11, 10, 20), "Cliente Cuenta", "Minorista", "Matambre", 1, 10000, 10000, 2000, .2, "Cuenta Corriente", "Vendedor Demo", None, "CLI000002", "PRO000004", "OK", "Minorista", "Precio base", None, None, None, None, None, "PENDIENTE", 10000, "VENTA"],
         ["", datetime(2026, 10, 12, 12), datetime(2026, 10, 12, 12), "Cliente Cuenta", None, None, None, None, None, None, None, "Transferencia", "Vendedor Demo", "Cobro parcial de saldo", "CLI000002", None, "COBRO OK", None, None, None, None, None, 3000, None, None, None, "COBRO"],
@@ -96,7 +96,7 @@ def main():
         ]
         assert listed == [
             "T-20261011-CLI000001",
-            "T-20261012-CLI000001",
+            "T-20240415-CLI000001",
             "T-20261011-CLI000002",
         ], listed
         assert ticket["B3"].value == "T-20261011-CLI000001"
