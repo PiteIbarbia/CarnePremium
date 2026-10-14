@@ -628,6 +628,180 @@ def setup_products(
     ws.freeze_panes = "A2"
 
 
+
+# ============================================================
+# RECUPERACION SEGURA DE VENTAS HISTORICAS
+# ============================================================
+
+def _normalize_text(value):
+    return str(value or "").strip().casefold()
+
+
+def _date_key(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    try:
+        from datetime import date as _date
+        if isinstance(value, _date):
+            return value.isoformat()
+    except TypeError:
+        pass
+    return str(value or "").strip()[:10]
+
+
+def recover_legacy_sales_from_backups(workbook):
+    """
+    Recupera H:K de una copia histórica si una fila con producto y kilos fue
+    clasificada como COBRO y sus resultados comerciales quedaron vacíos.
+    Si no existe una copia segura, aborta antes de guardar el maestro; nunca
+    calcula a ciegas el precio histórico usando el catálogo actual.
+    """
+    if "05_VENTAS" not in workbook.sheetnames:
+        return {"restauradas": 0, "sin_cambios": 0}
+
+    ws = workbook["05_VENTAS"]
+    col = {
+        str(ws.cell(1, c).value).strip(): c
+        for c in range(1, ws.max_column + 1)
+        if ws.cell(1, c).value not in (None, "")
+    }
+    needed = {"Fecha", "Cliente", "Producto", "Kg", "PrecioKg", "Importe",
+              "Ganancia$", "Ganancia%", "EstadoVenta", "TipoRegistro"}
+    if not needed.issubset(col):
+        return {"restauradas": 0, "sin_cambios": 0}
+
+    to_recover = []
+    for row in range(2, min(MAX_ROWS, ws.max_row) + 1):
+        kind = _normalize_text(ws.cell(row, col["TipoRegistro"]).value)
+        if kind != "cobro":
+            continue
+        product = _normalize_text(ws.cell(row, col["Producto"]).value)
+        client = _normalize_text(ws.cell(row, col["Cliente"]).value)
+        try:
+            kg = float(ws.cell(row, col["Kg"]).value)
+        except (TypeError, ValueError):
+            continue
+        if not product or not client or kg <= 0:
+            continue
+        price = ws.cell(row, col["PrecioKg"]).value
+        amount = ws.cell(row, col["Importe"]).value
+        if isinstance(price, (int, float)) and not isinstance(price, bool) and isinstance(amount, (int, float)) and not isinstance(amount, bool):
+            continue
+        to_recover.append(row)
+
+    if not to_recover:
+        return {"restauradas": 0, "sin_cambios": 0}
+
+    backup_dir = MASTER_FILE.parent.parent / "02_Backups"
+    backups = sorted(
+        (
+            p for p in backup_dir.glob("CarnePremiumERP_before_*.xlsx")
+            if p.is_file() and not p.name.startswith("~$")
+        ),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ) if backup_dir.exists() else []
+
+    output_cols = {
+        "PrecioKg": 8, "Importe": 9, "Ganancia$": 10, "Ganancia%": 11,
+        "_ClienteID": 15, "_ProductoID": 16, "EstadoVenta": 17,
+        "TipoAplicado": 18, "MotivoPrecio": 19, "OfertaID": 20,
+        "OfertaNombre": 21, "PrecioEspecialID": 22,
+    }
+    missing = list(to_recover)
+    restored = 0
+
+    for backup_path in backups:
+        if not missing:
+            break
+        try:
+            backup_wb = load_workbook(backup_path, data_only=True, read_only=True)
+        except Exception:
+            continue
+        try:
+            if "05_VENTAS" not in backup_wb.sheetnames:
+                continue
+            old = backup_wb["05_VENTAS"]
+            old_cols = {
+                str(old.cell(1, c).value).strip(): c
+                for c in range(1, old.max_column + 1)
+                if old.cell(1, c).value not in (None, "")
+            }
+            required_old = {"Fecha", "Cliente", "Producto", "Kg", "PrecioKg", "Importe", "EstadoVenta"}
+            if not required_old.issubset(old_cols):
+                continue
+
+            # Match by row content, not by row number alone.
+            lookup = {}
+            for old_row in range(2, min(MAX_ROWS, old.max_row) + 1):
+                if _normalize_text(old.cell(old_row, old_cols["EstadoVenta"]).value) != "ok":
+                    continue
+                client = _normalize_text(old.cell(old_row, old_cols["Cliente"]).value)
+                product = _normalize_text(old.cell(old_row, old_cols["Producto"]).value)
+                day = _date_key(old.cell(old_row, old_cols["Fecha"]).value)
+                try:
+                    kg = round(float(old.cell(old_row, old_cols["Kg"]).value), 3)
+                    price = old.cell(old_row, old_cols["PrecioKg"]).value
+                    amount = old.cell(old_row, old_cols["Importe"]).value
+                except (TypeError, ValueError):
+                    continue
+                if not client or not product or kg <= 0:
+                    continue
+                if not isinstance(price, (int, float)) or isinstance(price, bool):
+                    continue
+                if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                    continue
+                key = (client, product, day, kg)
+                if key not in lookup:
+                    lookup[key] = old_row
+
+            for row in list(missing):
+                try:
+                    kg = round(float(ws.cell(row, col["Kg"]).value), 3)
+                except (TypeError, ValueError):
+                    continue
+                key = (
+                    _normalize_text(ws.cell(row, col["Cliente"]).value),
+                    _normalize_text(ws.cell(row, col["Producto"]).value),
+                    _date_key(ws.cell(row, col["Fecha"]).value),
+                    kg,
+                )
+                old_row = lookup.get(key)
+                if old_row is None:
+                    continue
+                for header, dest_col in output_cols.items():
+                    if header in old_cols:
+                        value = old.cell(old_row, old_cols[header]).value
+                        if value not in (None, "") or header in ("PrecioKg", "Importe", "EstadoVenta"):
+                            ws.cell(row, dest_col).value = value
+                if (
+                    isinstance(ws.cell(row, col["PrecioKg"]).value, (int, float))
+                    and isinstance(ws.cell(row, col["Importe"]).value, (int, float))
+                    and _normalize_text(ws.cell(row, col["EstadoVenta"]).value) == "ok"
+                ):
+                    missing.remove(row)
+                    restored += 1
+        finally:
+            backup_wb.close()
+
+    if missing:
+        rows = ", ".join(str(row) for row in missing)
+        raise RuntimeError(
+            "Actualización detenida para proteger el historial: 05_VENTAS contiene "
+            "filas con corte y kilos marcadas como COBRO, pero sin PrecioKg/Importe. "
+            f"No se encontró una copia anterior segura para restaurar las filas {rows}. "
+            "El Excel maestro no se guardó. Recuperá esas ventas desde una copia de "
+            "seguridad o revisá sus importes históricos antes de volver a actualizar."
+        )
+
+    # En cuanto el importe histórico ha sido recuperado, el registro vuelve
+    # a ser una venta y conserva sus datos comerciales originales.
+    for row in to_recover:
+        ws.cell(row, col["TipoRegistro"]).value = "VENTA"
+
+    return {"restauradas": restored, "sin_cambios": 0}
+
+
 # ============================================================
 # VENTAS
 # ============================================================
@@ -1942,6 +2116,12 @@ def main():
     workbook = ensure_workbook(
         MASTER_FILE
     )
+
+    print(
+        "[0/9] Comprobando que las ventas históricas se puedan preservar..."
+    )
+    recovery = recover_legacy_sales_from_backups(workbook)
+    print(f"Ventas históricas restauradas desde backup: {recovery['restauradas']}")
 
     print(
         "[1/9] Parámetros..."
