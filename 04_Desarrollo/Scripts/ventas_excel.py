@@ -1,11 +1,29 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+import hashlib
 
 from motor_comercial import determinar_precio_venta, find_client
 
 
 STATUS_OK = "OK"
+
+
+def firma_entrada_venta(ws, fila: int) -> str:
+    """Huella estable de los campos que determinan el precio de una venta."""
+    parts = []
+    for column in (2, 4, 5, 6, 7):  # fecha, cliente, tipo precio, producto, kilos
+        value = ws.cell(fila, column).value
+        if isinstance(value, datetime):
+            normalized = value.date().isoformat()
+        elif isinstance(value, date):
+            normalized = value.isoformat()
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            normalized = format(float(value), ".12g")
+        else:
+            normalized = str(value or "").strip()
+        parts.append(normalized)
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 def procesar_venta_excel(
@@ -429,7 +447,33 @@ def procesar_todas_las_ventas(
         if not cliente and not producto and kg in (None, ""):
             continue
 
+        # Evitar recalcular ventas históricas aprobadas en cada actualización:
+        # su precio es una fotografía comercial. Solo se vuelve a procesar si
+        # cambian fecha/cliente/tipo de precio/producto/kg.
+        signature_col = 29 if ws.cell(1, 29).value == "_FirmaEntrada" else None
+        if signature_col:
+            current_signature = firma_entrada_venta(ws, fila)
+            stored_signature = str(ws.cell(fila, signature_col).value or "").strip()
+            current_status = str(ws.cell(fila, 17).value or "").strip().upper()
+            price = ws.cell(fila, 8).value
+            amount = ws.cell(fila, 9).value
+            if (
+                current_status == STATUS_OK
+                and stored_signature
+                and stored_signature == current_signature
+                and isinstance(price, (int, float))
+                and isinstance(amount, (int, float))
+            ):
+                continue
+
         resultado = procesar_venta_excel(workbook, fila)
         resultados.append(resultado)
+        if signature_col:
+            if str(ws.cell(fila, 17).value or "").strip().upper() == STATUS_OK:
+                # Recalcular la huella después del proceso, porque B puede
+                # haber pasado de TODAY() a una fecha fija.
+                ws.cell(fila, signature_col).value = firma_entrada_venta(ws, fila)
+            else:
+                ws.cell(fila, signature_col).value = None
 
     return resultados
