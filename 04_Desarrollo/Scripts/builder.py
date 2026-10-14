@@ -28,10 +28,10 @@ from ventas_excel import procesar_todas_las_ventas
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.5.1"
+BUILD_VERSION = "0.5.2"
 
 BUILD_NAME = (
-    "Build 0.5.1 - Selectores cliente/producto + actualización monitorizada"
+    "Build 0.5.2 - Ciclo de venta y cobro con ticket histórico"
 )
 
 MAX_ROWS = 500
@@ -709,7 +709,8 @@ def setup_sales(
         "_TicketLineaKey",
         "EstadoCobro",
         "SaldoTicket",
-        "TipoRegistro"
+        "TipoRegistro",
+        "FechaCobro"
     ]
 
     set_headers(
@@ -1047,7 +1048,7 @@ def setup_sales(
         ticket_total = f'SUMIFS($I$2:$I$501,{date_client_criteria})'
         received_criteria = (
             date_client_criteria
-            + ',$L$2:$L$501,"<>Cuenta Corriente"'
+            + ',$L$2:$L$501,"<>",$L$2:$L$501,"<>Cuenta Corriente"'
         )
         received_total = f'SUMIFS($W$2:$W$501,{received_criteria})'
         rounded_total = f'ROUND({ticket_total},2)'
@@ -1096,6 +1097,7 @@ def setup_sales(
         ws.cell(row, 23).number_format = '$ #,##0.00'
         ws.cell(row, 25).alignment = Alignment(horizontal="center")
         ws.cell(row, 26).number_format = '$ #,##0.00'
+        ws.cell(row, 28).number_format = "dd/mm/yyyy"
 
         ws.cell(
             row,
@@ -1154,21 +1156,13 @@ def setup_sales(
     payment_amount_validation.errorTitle = "Importe de cobro inválido"
     payment_amount_validation.error = "Ingresá un importe cobrado igual o mayor que cero."
     payment_amount_validation.promptTitle = "Pago recibido"
-    payment_amount_validation.prompt = "Registrá aquí el importe realmente cobrado. El estado y el saldo se calculan automáticamente."
+    payment_amount_validation.prompt = "Al cobrar, cargá el importe real en W y el medio en L. Si el pago fue otro día, indicá esa fecha en AB. Estado y saldo se actualizan automáticamente."
     ws.add_data_validation(payment_amount_validation)
     payment_amount_validation.add("W2:W501")
 
-    transaction_type_validation = DataValidation(
-        type="list",
-        formula1='"VENTA,COBRO"',
-        allow_blank=True,
-    )
-    transaction_type_validation.errorTitle = "Tipo de registro inválido"
-    transaction_type_validation.error = "Elegí VENTA o COBRO. Dejá vacío para una venta normal."
-    transaction_type_validation.promptTitle = "Tipo de registro"
-    transaction_type_validation.prompt = "VENTA: cargar corte y kilos. COBRO: cargar cliente, medio de pago e importe recibido, sin corte ni kilos."
-    ws.add_data_validation(transaction_type_validation)
-    transaction_type_validation.add("AA2:AA501")
+    # TipoRegistro (AA) es técnico: no se edita durante el cobro.
+    # Las filas con producto/kg siempre permanecen como VENTA.
+
 
     # --------------------------------------------------------
     # Tabla
@@ -1177,7 +1171,7 @@ def setup_sales(
     ensure_table(
         ws,
         "VentasTable",
-        "A1:AA501"
+        "A1:AB501"
     )
 
     for column, width in {
@@ -1214,6 +1208,7 @@ def setup_sales(
         "Y": 22,
         "Z": 18,
         "AA": 20,
+        "AB": 16,
 
     }.items():
 
@@ -1230,9 +1225,11 @@ def setup_sales(
         "P"
     ].hidden = True
 
-    # V y X son técnicas; W es PagoRecibido; Y/Z muestran estado y saldo; AA distingue VENTA/COBRO.
+    # V y X son técnicas; AA es técnico y no se cambia al cobrar.
+    # W es el importe recibido, Y/Z muestran estado y saldo, AB es FechaCobro.
     ws.column_dimensions["V"].hidden = True
     ws.column_dimensions["X"].hidden = True
+    ws.column_dimensions["AA"].hidden = True
 
     ws.freeze_panes = "A2"
 
@@ -1266,49 +1263,13 @@ def setup_home(
     )
 
     rows = [
-
-        (
-            "Flujo",
-            "Cliente → Producto → "
-            "Kg → Motor Comercial → "
-            "Precio → Venta"
-        ),
-
-        (
-            "Paso 1",
-            "Escribir nombre del cliente"
-        ),
-
-        (
-            "Paso 2",
-            "Escribir nombre del producto"
-        ),
-
-        (
-            "Paso 3",
-            "Cargar Kg"
-        ),
-
-        (
-            "Paso 4",
-            "El motor determina el precio"
-        ),
-
-        (
-            "Paso 5",
-            "Verificar precio aplicado "
-            "y motivo"
-        ),
-
-        (
-            "Estado",
-            "MVP 0.1.5"
-        ),
-
-        (
-            "Compatibilidad",
-            "Excel 2019 + Google Sheets"
-        ),
+        ("Flujo", "Pedido/venta → Ticket histórico → Cobro → Caja y Cuenta Corriente"),
+        ("Paso 1", "Cargá cliente, corte y kilos. La venta y su ticket quedan registrados aunque siga pendiente."),
+        ("Paso 2", "Al cobrar, completá MedioPago (L) e Importe cobrado (W)."),
+        ("Paso 3", "Si cobrás en otra fecha, ingresá la fecha real en FechaCobro (AB); si queda vacía, se usa la fecha de venta."),
+        ("Paso 4", "EstadoCobro (Y), SaldoTicket (Z), Caja y Cuenta Corriente se actualizan automáticamente."),
+        ("Importante", "No cambies TipoRegistro (AA) al cobrar. Es un campo técnico; la venta debe conservar su historial."),
+        ("Compatibilidad", "Excel 2019 + Google Sheets"),
     ]
 
     for row, (
@@ -1533,7 +1494,8 @@ def validate_before_save(
         "_TicketLineaKey",
         "EstadoCobro",
         "SaldoTicket",
-        "TipoRegistro"
+        "TipoRegistro",
+        "FechaCobro"
     ]
 
     actual_headers = [
