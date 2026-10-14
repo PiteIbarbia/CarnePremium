@@ -21,7 +21,7 @@ from dashboard import preparar_dashboard
 from caja import sincronizar_ventas_en_caja
 from cuenta_corriente import sincronizar_cuenta_corriente
 from ticket import preparar_ticket
-from ventas_excel import procesar_todas_las_ventas
+from ventas_excel import procesar_todas_las_ventas, firma_entrada_venta
 
 
 # ============================================================
@@ -645,6 +645,45 @@ def setup_sales(
         ws
     )
 
+    # Fotografía de ventas históricas antes de reescribir fórmulas de la plantilla.
+    # El precio/importe de una venta confirmada no debe cambiar porque se actualice
+    # el ERP o se modifique el catálogo días después. Se usa _FirmaEntrada para
+    # reprocesar únicamente cuando cambian los campos que determinan esa venta.
+    historicas_a_preservar = {}
+    for old_row in range(2, MAX_ROWS + 1):
+        client_name = ws.cell(old_row, 4).value
+        product_name = ws.cell(old_row, 6).value
+        try:
+            kg_value = float(ws.cell(old_row, 7).value)
+            old_price = float(ws.cell(old_row, 8).value)
+            old_amount = float(ws.cell(old_row, 9).value)
+        except (TypeError, ValueError):
+            continue
+        old_status = str(ws.cell(old_row, 17).value or "").strip().upper()
+        if (
+            old_status != "OK"
+            or not str(client_name or "").strip()
+            or not str(product_name or "").strip()
+            or kg_value <= 0
+            or old_price <= 0
+            or old_amount < 0
+        ):
+            continue
+        signature_exists = ws.cell(1, 29).value == "_FirmaEntrada"
+        old_signature = (
+            str(ws.cell(old_row, 29).value or "").strip()
+            if signature_exists
+            else ""
+        )
+        # Build 0.5.1 no guardaba huella. En la primera migración se toma
+        # la venta actual como referencia para conservar su precio histórico.
+        baseline_signature = old_signature or firma_entrada_venta(ws, old_row)
+        snapshot = {
+            col: ws.cell(old_row, col).value
+            for col in (8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22)
+        }
+        historicas_a_preservar[old_row] = (snapshot, baseline_signature)
+
     # Migración segura desde Build 0.3.6: W antes era TicketID manual.
     # Si Caja ya tenía un cobro automático asociado a la venta, conserva su
     # importe como PagoRecibido. No deduce el pago a partir de la venta bruta.
@@ -710,7 +749,8 @@ def setup_sales(
         "EstadoCobro",
         "SaldoTicket",
         "TipoRegistro",
-        "FechaCobro"
+        "FechaCobro",
+        "_FirmaEntrada"
     ]
 
     set_headers(
@@ -1113,6 +1153,18 @@ def setup_sales(
             "hh:mm:ss"
         )
 
+    # Restaurar ventas ya confirmadas antes de procesar las filas.
+    # Esto evita recalcular importes históricos en una actualización rutinaria.
+    for old_row, (snapshot, baseline_signature) in historicas_a_preservar.items():
+        for col, value in snapshot.items():
+            ws.cell(old_row, col).value = value
+        current_kind = str(ws.cell(old_row, 27).value or "").strip().upper()
+        if current_kind == "COBRO":
+            # Con productos y kilos, una fila aprobada es una venta, no un cobro
+            # suelto. Se repara la clasificación sin perder precio ni ticket.
+            ws.cell(old_row, 27).value = "VENTA"
+        ws.cell(old_row, 29).value = baseline_signature
+
     # --------------------------------------------------------
     # Validaciones
     #
@@ -1171,7 +1223,7 @@ def setup_sales(
     ensure_table(
         ws,
         "VentasTable",
-        "A1:AB501"
+        "A1:AC501"
     )
 
     for column, width in {
@@ -1209,6 +1261,7 @@ def setup_sales(
         "Z": 18,
         "AA": 20,
         "AB": 16,
+        "AC": 18,
 
     }.items():
 
@@ -1230,6 +1283,7 @@ def setup_sales(
     ws.column_dimensions["V"].hidden = True
     ws.column_dimensions["X"].hidden = True
     ws.column_dimensions["AA"].hidden = True
+    ws.column_dimensions["AC"].hidden = True
 
     ws.freeze_panes = "A2"
 
@@ -1495,7 +1549,8 @@ def validate_before_save(
         "EstadoCobro",
         "SaldoTicket",
         "TipoRegistro",
-        "FechaCobro"
+        "FechaCobro",
+        "_FirmaEntrada"
     ]
 
     actual_headers = [
