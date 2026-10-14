@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.5.1"
+EXPECTED_VERSION = "0.5.2"
 
 EXPECTED_BUILD_NAME = (
-    "Build 0.5.1 - Selectores cliente/producto + actualización monitorizada"
+    "Build 0.5.2 - Ciclo de venta y cobro con ticket histórico"
 )
 
 # ============================================================
@@ -121,7 +121,7 @@ def main():
     )
 
     print(
-        "TEST MVP 0.4.0"
+        "TEST MVP 0.5.2"
     )
 
     print(
