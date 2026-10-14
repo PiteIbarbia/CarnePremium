@@ -105,9 +105,11 @@ def _client_id_for_name(workbook, client_name):
     return ""
 
 
-def _cash_date(value):
+def _cash_date(value, fallback=None):
     if isinstance(value, (date, datetime)):
         return value
+    if isinstance(fallback, (date, datetime)):
+        return fallback
     return datetime.now()
 
 
@@ -148,6 +150,13 @@ def sincronizar_ventas_en_caja(workbook):
         paid = _number(sales.cell(row, sc["PagoRecibido"]).value)
         payment = _text(sales.cell(row, sc["MedioPago"]).value)
         sale_date = _cash_date(sales.cell(row, sc["Fecha"]).value)
+        payment_date_col = sc.get("FechaCobro")
+        payment_date_value = (
+            sales.cell(row, payment_date_col).value
+            if payment_date_col
+            else None
+        )
+        collection_date = _cash_date(payment_date_value, fallback=sale_date)
         if (
             not client or not client_id or paid is None or paid <= 0
             or not payment
@@ -167,7 +176,7 @@ def sincronizar_ventas_en_caja(workbook):
             ref = _sale_reference(sales, row, sc)
 
         expected[ref] = {
-            "fecha": sale_date,
+            "fecha": collection_date,
             "concepto": concept,
             "medio_pago": payment,
             "importe": round(paid, 2),
