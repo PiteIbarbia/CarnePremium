@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.4.0"
+EXPECTED_VERSION = "0.5.0"
 
 EXPECTED_BUILD_NAME = (
-    "Build 0.4.0 - Ventas + Ticket automático + Cobros + Cuenta Corriente"
+    "Build 0.5.0 - Selectores cliente/producto + actualización en un clic"
 )
 
 # ============================================================
@@ -664,26 +664,29 @@ def main():
 
         # ----------------------------------------------------
         # Validaciones de Ventas
-        #
-        # Cliente y Producto NO tienen lista desplegable.
-        # Se escriben por nombre.
-        #
-        # Solo TipoPrecio y MedioPago tienen listas.
         # ----------------------------------------------------
 
-        validation_count = len(
-            sales
-            .data_validations
-            .dataValidation
-        )
+        sales_validations = {
+            str(cell_range): validation.formula1
+            for validation in sales.data_validations.dataValidation
+            for cell_range in validation.sqref.ranges
+        }
+        required_sales_ranges = {
+            "D2:D501": "=ListaClientes",
+            "F2:F501": "=ListaProductos",
+        }
+        for target_range, expected_formula in required_sales_ranges.items():
+            if sales_validations.get(target_range) != expected_formula:
+                fail(
+                    f"05_VENTAS: falta el selector de {target_range}; "
+                    f"se esperaba {expected_formula!r} y se encontró "
+                    f"{sales_validations.get(target_range)!r}."
+                )
 
-        if validation_count < 2:
-
-            fail(
-                "05_VENTAS: "
-                "faltan las 2 validaciones "
-                "esperadas (TipoPrecio y MedioPago)."
-            )
+        if "ListaClientes" not in workbook.defined_names:
+            fail("Falta el rango con nombre ListaClientes.")
+        if "ListaProductos" not in workbook.defined_names:
+            fail("Falta el rango con nombre ListaProductos.")
 
         print(
             "Ventas: OK"

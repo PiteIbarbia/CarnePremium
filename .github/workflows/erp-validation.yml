@@ -16,6 +16,8 @@ jobs:
           python-version: "3.13"
       - name: Install dependencies
         run: python -m pip install -r 04_Desarrollo/requirements.txt
+      - name: Validate one-click updater syntax
+        run: python -m py_compile 04_Desarrollo/Scripts/actualizar_erp.py
       - name: Build workbook
         run: python 04_Desarrollo/Scripts/builder.py
       - name: Validate workbook

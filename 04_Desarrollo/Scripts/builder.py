@@ -12,6 +12,7 @@ import uuid
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from config import MASTER_FILE, SHEETS
@@ -27,10 +28,10 @@ from ventas_excel import procesar_todas_las_ventas
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.4.0"
+BUILD_VERSION = "0.5.0"
 
 BUILD_NAME = (
-    "Build 0.4.0 - Ventas + Ticket automático + Cobros + Cuenta Corriente"
+    "Build 0.5.0 - Selectores cliente/producto + actualización en un clic"
 )
 
 MAX_ROWS = 500
@@ -200,6 +201,15 @@ def add_list_validation(
     )
 
     return validation
+
+
+def ensure_defined_range(workbook, name: str, reference: str):
+    """Crea o actualiza un rango con nombre compatible con Excel 2019."""
+    if name in workbook.defined_names:
+        del workbook.defined_names[name]
+    workbook.defined_names.add(
+        DefinedName(name=name, attr_text=reference)
+    )
 
 
 # ============================================================
@@ -1110,6 +1120,18 @@ def setup_sales(
     # TipoPrecio + MedioPago:
     # listas controladas.
     # --------------------------------------------------------
+
+    # Listas de selección rápidas para los campos visibles D y F.
+    # Los rangos abarcan la capacidad operativa configurada para clientes/productos.
+    # Los nombres definidos evitan que la validación apunte directamente a otra hoja.
+    ensure_defined_range(
+        workbook, "ListaClientes", "'03_CLIENTES'!$B$2:$B$501"
+    )
+    ensure_defined_range(
+        workbook, "ListaProductos", "'04_PRODUCTOS'!$B$2:$B$501"
+    )
+    add_list_validation(ws, "D2:D501", "=ListaClientes")
+    add_list_validation(ws, "F2:F501", "=ListaProductos")
 
     add_list_validation(
         ws,
