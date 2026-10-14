@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -14,7 +15,8 @@ from cuenta_corriente import sincronizar_cuenta_corriente
 from motor_comercial import find_client, find_product
 from ticket import preparar_ticket
 from ventas_excel import procesar_todas_las_ventas
-from builder import setup_sales
+import builder
+from builder import setup_sales, recover_legacy_sales_from_backups
 
 
 def make_workbook():
@@ -135,7 +137,57 @@ def test_order_payment_does_not_remove_sale_or_ticket():
         wb.close()
 
 
+
+def test_backup_recovers_cleared_historical_sale_values():
+    """Si H:I fueron borradas por un COBRO erróneo, usar backup o no guardar."""
+    wb = make_workbook()
+    original_master = builder.MASTER_FILE
+    try:
+        sales = wb["05_VENTAS"]
+        sales["AA2"] = "COBRO"
+        sales["Q2"] = "COBRO OK"
+        for cell in ("H2", "I2", "J2", "K2"):
+            sales[cell] = None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            backup_dir = root / "02_Backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            builder.MASTER_FILE = root / "01_ERP" / "CarnePremiumERP.xlsx"
+
+            backup = Workbook()
+            old_sales = backup.active
+            old_sales.title = "05_VENTAS"
+            for col in range(1, sales.max_column + 1):
+                old_sales.cell(1, col).value = sales.cell(1, col).value
+                old_sales.cell(2, col).value = sales.cell(2, col).value
+            old_sales["AA2"] = "VENTA"
+            old_sales["Q2"] = "OK"
+            old_sales["H2"] = 10000
+            old_sales["I2"] = 20000
+            old_sales["J2"] = 3000
+            old_sales["K2"] = .15
+            old_sales["O2"] = "CLI000001"
+            old_sales["P2"] = "PRO000001"
+            old_sales["R2"] = "Minorista"
+            old_sales["S2"] = "Precio base"
+            backup_path = backup_dir / "CarnePremiumERP_before_v0.5.1_test.xlsx"
+            backup.save(backup_path)
+            backup.close()
+
+            result = recover_legacy_sales_from_backups(wb)
+            assert result["restauradas"] == 1, result
+            assert sales["AA2"].value == "VENTA"
+            assert sales["Q2"].value == "OK"
+            assert sales["H2"].value == 10000
+            assert sales["I2"].value == 20000
+    finally:
+        builder.MASTER_FILE = original_master
+        wb.close()
+
+
 def main():
+    test_backup_recovers_cleared_historical_sale_values()
     test_order_payment_does_not_remove_sale_or_ticket()
     wb = make_workbook()
     try:
