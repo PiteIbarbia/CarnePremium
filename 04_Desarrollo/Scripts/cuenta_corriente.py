@@ -130,32 +130,41 @@ def sincronizar_cuenta_corriente(workbook):
 
     for row in range(2, min(MAX_SALES_ROW, sales.max_row) + 1):
         status = _text(sales.cell(row, columns["EstadoVenta"]).value).upper()
-        if status not in ("OK", "COBRO OK"):
-            continue
-
         kind = _text(sales.cell(row, columns["TipoRegistro"]).value).upper() or "VENTA"
         name = _text(sales.cell(row, columns["Cliente"]).value)
         client_match = clients.get(name.casefold())
         if not name or client_match is None:
             continue
         client_id, canonical_name = client_match
-        day = _as_date(sales.cell(row, columns["Fecha"]).value)
-        if day is None:
+        sale_day = _as_date(sales.cell(row, columns["Fecha"]).value)
+        if sale_day is None:
             continue
+
         payment_method = _text(sales.cell(row, columns["MedioPago"]).value)
         paid = _number(sales.cell(row, columns["PagoRecibido"]).value) or 0.0
-        if payment_method.casefold().replace(" ", "") == "cuentacorriente":
+        if (
+            not payment_method
+            or payment_method.casefold().replace(" ", "") == "cuentacorriente"
+            or paid <= 0
+        ):
             paid = 0.0
 
-        group = get_group(day, client_id, canonical_name)
-        group["registros"] += 1
-
-        if kind == "COBRO" and status == "COBRO OK":
+        # Un cobro de deuda antigua es un movimiento, no una venta nueva.
+        if kind == "COBRO":
+            if status != "COBRO OK":
+                continue
+            payment_day = (
+                _as_date(sales.cell(row, columns["FechaCobro"]).value)
+                if "FechaCobro" in columns
+                else None
+            ) or sale_day
+            group = get_group(payment_day, client_id, canonical_name)
+            group["registros"] += 1
             if paid > 0:
                 group["cobros_deuda"] += paid
             continue
 
-        if status != "OK" or kind == "COBRO":
+        if status != "OK":
             continue
         product = _text(sales.cell(row, columns["Producto"]).value)
         kg = _number(sales.cell(row, columns["Kg"]).value)
@@ -163,11 +172,29 @@ def sincronizar_cuenta_corriente(workbook):
         if not product or kg is None or kg <= 0 or amount is None or amount < 0:
             continue
 
-        group["kg"] += kg
-        group["ventas"] += amount
-        group["cobros_ventas"] += max(0.0, paid)
-        group["lineas_venta"] += 1
-        group["ticket_id"] = f"T-{day:%Y%m%d}-{client_id}"
+        # La venta permanece registrada en su fecha original, aunque todavía
+        # no se haya cobrado o se cobre varios días después.
+        sale_group = get_group(sale_day, client_id, canonical_name)
+        sale_group["kg"] += kg
+        sale_group["ventas"] += amount
+        sale_group["lineas_venta"] += 1
+        sale_group["registros"] += 1
+        ticket_id = f"T-{sale_day:%Y%m%d}-{client_id}"
+        sale_group["ticket_id"] = ticket_id
+
+        # El cobro es independiente de la venta. Solo el dinero efectivamente
+        # recibido se registra en el día de cobro, sin duplicar la venta.
+        if paid > 0:
+            payment_day = (
+                _as_date(sales.cell(row, columns["FechaCobro"]).value)
+                if "FechaCobro" in columns
+                else None
+            ) or sale_day
+            payment_group = get_group(payment_day, client_id, canonical_name)
+            payment_group["cobros_ventas"] += paid
+            payment_group["registros"] += 1
+            if not payment_group["ticket_id"]:
+                payment_group["ticket_id"] = ticket_id
 
     ws = workbook["09_CTACTE"] if "09_CTACTE" in workbook.sheetnames else workbook.create_sheet("09_CTACTE")
     ws.sheet_view.showGridLines = False
