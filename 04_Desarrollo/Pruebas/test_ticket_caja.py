@@ -13,6 +13,8 @@ from caja import sincronizar_ventas_en_caja
 from cuenta_corriente import sincronizar_cuenta_corriente
 from motor_comercial import find_client, find_product
 from ticket import preparar_ticket
+from ventas_excel import procesar_todas_las_ventas
+from builder import setup_sales
 
 
 def make_workbook():
@@ -25,7 +27,7 @@ def make_workbook():
         "Vendedor", "Observaciones", "_ClienteID", "_ProductoID", "EstadoVenta",
         "TipoAplicado", "MotivoPrecio", "OfertaID", "OfertaNombre",
         "PrecioEspecialID", "PagoRecibido", "_TicketLineaKey", "EstadoCobro",
-        "SaldoTicket", "TipoRegistro",
+        "SaldoTicket", "TipoRegistro", "FechaCobro",
     ])
 
     clients = wb.create_sheet("03_CLIENTES")
@@ -62,7 +64,79 @@ def make_workbook():
     return wb
 
 
+
+def test_order_payment_does_not_remove_sale_or_ticket():
+    """Un pedido pendiente genera ticket; cobrarlo no lo transforma ni lo borra."""
+    wb = make_workbook()
+    try:
+        sales = wb["05_VENTAS"]
+        # Aislar la fila de prueba de los datos auxiliares del fixture.
+        for row in range(3, sales.max_row + 1):
+            for col in range(1, 29):
+                sales.cell(row, col).value = None
+
+        sales["AA2"] = "COBRO"  # Simula la clasificación errónea de una venta heredada.
+        sales["L2"] = None
+        sales["W2"] = None
+        setup_sales(wb)
+        procesar_todas_las_ventas(wb, 2, 2)
+
+        assert sales["AA2"].value == "VENTA", sales["AA2"].value
+        assert sales["Q2"].value == "OK", sales["Q2"].value
+        assert sales["H2"].value == 10000
+        assert sales["I2"].value == 20000
+
+        preparar_ticket(wb)
+        ticket = wb["06_TICKET"]
+        ticket_id = "T-20261011-CLI000001"
+        listed_before = {
+            ticket.cell(row, 7).value
+            for row in range(2, 502)
+            if ticket.cell(row, 7).value not in (None, "")
+        }
+        assert ticket_id in listed_before, listed_before
+
+        # Cobro posterior: la fecha de venta y el importe comercial se conservan.
+        sales["L2"] = "Efectivo"
+        sales["W2"] = 20000
+        sales["AB2"] = datetime(2026, 10, 12, 13, 30)
+        procesar_todas_las_ventas(wb, 2, 2)
+        preparar_ticket(wb)
+        cash_result = sincronizar_ventas_en_caja(wb)
+        sincronizar_cuenta_corriente(wb)
+
+        assert sales["AA2"].value == "VENTA"
+        assert sales["H2"].value == 10000
+        assert sales["I2"].value == 20000
+        listed_after = {
+            ticket.cell(row, 7).value
+            for row in range(2, 502)
+            if ticket.cell(row, 7).value not in (None, "")
+        }
+        assert ticket_id in listed_after, listed_after
+
+        cash = wb["07_CAJA"]
+        assert cash_result["ingresos_cobrados"] == 20000, cash_result
+        assert cash["B2"].value == datetime(2026, 10, 12, 13, 30), cash["B2"].value
+        assert cash["G2"].value == 20000
+
+        account = wb["09_CTACTE"]
+        rows_by_day = {
+            account.cell(row, 1).value: row
+            for row in range(2, account.max_row + 1)
+            if account.cell(row, 3).value == "Cliente Demo"
+        }
+        day_sale = rows_by_day[datetime(2026, 10, 11).date()]
+        day_paid = rows_by_day[datetime(2026, 10, 12).date()]
+        assert account.cell(day_sale, 9).value == 20000
+        assert account.cell(day_paid, 9).value == 0
+        assert account.cell(day_paid, 10).value == "PAGADO / OK"
+    finally:
+        wb.close()
+
+
 def main():
+    test_order_payment_does_not_remove_sale_or_ticket()
     wb = make_workbook()
     try:
         # Regresión: nunca se deben copiar textos de fórmulas de ID a Ventas.
