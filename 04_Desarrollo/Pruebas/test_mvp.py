@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.5.0"
+EXPECTED_VERSION = "0.5.1"
 
 EXPECTED_BUILD_NAME = (
-    "Build 0.5.0 - Selectores cliente/producto + actualización en un clic"
+    "Build 0.5.1 - Selectores cliente/producto + actualización monitorizada"
 )
 
 # ============================================================

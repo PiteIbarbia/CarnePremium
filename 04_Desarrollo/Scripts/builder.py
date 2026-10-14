@@ -28,10 +28,10 @@ from ventas_excel import procesar_todas_las_ventas
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.5.0"
+BUILD_VERSION = "0.5.1"
 
 BUILD_NAME = (
-    "Build 0.5.0 - Selectores cliente/producto + actualización en un clic"
+    "Build 0.5.1 - Selectores cliente/producto + actualización monitorizada"
 )
 
 MAX_ROWS = 500

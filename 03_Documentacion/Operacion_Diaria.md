@@ -18,8 +18,14 @@ Elegí el nombre exacto de la lista. Podés comenzar a escribir el nombre si ya 
 
 El generador crea una copia de respaldo antes de guardar el libro. Si alguna validación falla, el proceso avisa y no abre automáticamente el archivo resultante para revisión.
 
+## Actualización automática local (Excel en Windows)
+
+Para que el ERP se regenere automáticamente tras guardar los cambios, iniciá `INICIAR_MONITOR_ERP.bat` una sola vez y dejá abierta su ventana. Cargá ventas/cobros en Excel y guardá. El monitor espera a que se cierre el libro maestro y a que el archivo quede estable; después ejecuta el generador y las pruebas para actualizar tickets, Caja, Cuenta Corriente y reportes. No abre otro Excel automáticamente para no bloquear el siguiente lote. Cuando quieras detener el monitor, presioná Ctrl+C en su ventana.
+
+No ejecutes el monitor y `ACTUALIZAR_ERP.bat` simultáneamente. Si preferís una ejecución manual de un solo paso, cerrá Excel y usá `ACTUALIZAR_ERP.bat`.
+
 ## Alcance y compatibilidad
 
-Este acceso de un clic automatiza el proceso local de Excel; no ejecuta Python dentro del libro ni mientras se editan celdas. El archivo debe guardarse y cerrarse antes de regenerarlo para evitar perder datos o sobrescribir cambios no guardados.
+El monitor automatiza el proceso local de Excel; no ejecuta Python dentro del libro ni puede regenerar informes mientras el archivo maestro siga abierto. El archivo debe guardarse y cerrarse antes de regenerarlo para evitar perder datos o sobrescribir cambios no guardados. Si el monitor detecta un error, lo muestra en la consola y no repetirá continuamente el mismo intento; tras corregir y guardar el archivo, volverá a evaluar el cambio.
 
 Las listas desplegables usan rangos con nombre y cubren las filas operativas 2 a 501. Si importás el libro en Google Sheets, verificá las reglas de validación en D y F una vez: el diseño de las listas se conserva cuando la importación mantiene los rangos con nombre, pero Google Sheets no ejecuta el archivo BAT ni el generador local. La automatización del lado de Sheets requiere un mecanismo propio de Google Apps Script o una integración autenticada; no se debe asumir que el proceso local sincroniza una hoja en la nube.
