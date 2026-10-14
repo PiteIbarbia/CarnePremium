@@ -214,10 +214,10 @@ def preparar_ticket(workbook):
 
     ws.merge_cells("A42:D44")
     ws["A42"] = (
-        "El ticket se agrupa automáticamente por cliente y fecha. En W (PagoRecibido), "
-        "registrá el importe efectivamente cobrado; podés distribuir pagos en una o más "
-        "líneas del mismo cliente y día. EstadoCobro y SaldoTicket se calculan en Ventas. "
-        "Ejecutá el ERP para refrescar Ticket, Caja y Cuenta Corriente."
+        "La venta y el ticket permanecen en el historial. Al cobrar, completá L (MedioPago) "
+        "y W (PagoRecibido); Y (EstadoCobro) y Z (SaldoTicket) se actualizan automáticamente. "
+        "Si cobrás en otro día, ingresá la fecha real en AB (FechaCobro). No cambies AA "
+        "(TipoRegistro): es un campo técnico. Luego actualizá el ERP para sincronizar Caja y Cuenta Corriente."
     )
     ws["A42"].alignment = Alignment(wrap_text=True, vertical="center")
     ws["A42"].font = Font(italic=True, color="666666", size=9)
