@@ -31,9 +31,9 @@ def make_workbook():
     ])
 
     clients = wb.create_sheet("03_CLIENTES")
-    clients.append(["ClienteID", "Nombre"])
-    clients.append(['=IF(B2="","","CLI"&TEXT(ROW()-1,"000000"))', "Cliente Demo"])
-    clients.append(['=IF(B3="","","CLI"&TEXT(ROW()-1,"000000"))', "Cliente Cuenta"])
+    clients.append(["ClienteID", "Nombre", "Telefono", "Direccion", "TipoCliente", "Estado"])
+    clients.append(['=IF(B2="","","CLI"&TEXT(ROW()-1,"000000"))', "Cliente Demo", None, None, "Minorista", "Activo"])
+    clients.append(['=IF(B3="","","CLI"&TEXT(ROW()-1,"000000"))', "Cliente Cuenta", None, None, "Minorista", "Activo"])
 
     # IDs de cliente/producto se generan por fórmulas en Excel. openpyxl lee
     # esas fórmulas como texto, y el motor debe resolver IDs estables por fila.
