@@ -111,15 +111,6 @@ def procesar_venta_excel(
         "estado"
     )
 
-    medio_pago = ws.cell(fila, 12).value
-    if estado == STATUS_OK and not str(medio_pago or "").strip():
-        estado = "MEDIO DE PAGO REQUERIDO"
-        resultado["estado"] = estado
-        ws.cell(fila, 17).value = estado
-        for columna in (8, 9, 10, 11, 15, 16, 18, 19, 20, 21, 22):
-            ws.cell(fila, columna).value = None
-        return resultado
-
     # ========================================================
     # ERROR
     # ========================================================
@@ -333,6 +324,16 @@ def procesar_venta_excel(
         11
     ).number_format = "0.0%"
 
+    # AB (FechaCobro) es opcional. Se conserva cuando el pago se registra
+    # después; si no hay importe cobrado, no debe quedar una fecha de pago.
+    try:
+        pago_actual = float(ws.cell(fila, 23).value or 0)
+    except (TypeError, ValueError):
+        pago_actual = 0
+    if pago_actual <= 0:
+        ws.cell(fila, 28).value = None
+    ws.cell(fila, 28).number_format = "dd/mm/yyyy"
+
     return resultado
 
 
@@ -380,7 +381,14 @@ def procesar_cobro_excel(workbook, fila: int):
     else:
         ws.cell(fila, 15).value = None
     ws.cell(fila, 17).value = estado
+    if estado == "COBRO OK":
+        fecha_cobro = ws.cell(fila, 28).value
+        if fecha_cobro in (None, "") or (isinstance(fecha_cobro, str) and fecha_cobro.startswith("=")):
+            ws.cell(fila, 28).value = fecha
+    else:
+        ws.cell(fila, 28).value = None
     ws.cell(fila, 23).number_format = '$ #,##0.00'
+    ws.cell(fila, 28).number_format = "dd/mm/yyyy"
     return {
         "estado": estado,
         "tipo_registro": "COBRO",
@@ -400,15 +408,25 @@ def procesar_todas_las_ventas(
 
     for fila in range(fila_inicio, fila_fin + 1):
         cliente = ws.cell(fila, 4).value
-        producto = ws.cell(fila, 6).value
+        producto = str(ws.cell(fila, 6).value or "").strip()
+        kg = ws.cell(fila, 7).value
         tipo_registro = str(ws.cell(fila, 27).value or "").strip().upper()
+        hay_detalle_venta = bool(producto) or kg not in (None, "")
+
+        # Compatibilidad y protección de datos: si la fila conserva corte o
+        # kilos, es una venta aunque una versión anterior la haya marcado COBRO.
+        # Así no se borran H:K ni desaparece el ticket al reprocesar.
+        if hay_detalle_venta:
+            if tipo_registro != "VENTA":
+                ws.cell(fila, 27).value = "VENTA"
+            tipo_registro = "VENTA"
 
         if tipo_registro == "COBRO":
             if cliente or ws.cell(fila, 23).value not in (None, ""):
                 resultados.append(procesar_cobro_excel(workbook, fila))
             continue
 
-        if not cliente and not producto:
+        if not cliente and not producto and kg in (None, ""):
             continue
 
         resultado = procesar_venta_excel(workbook, fila)
