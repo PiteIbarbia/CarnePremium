@@ -20,3 +20,4 @@ La venta sigue siendo el registro principal. **No se cambia a `COBRO` cuando el 
 5. Al actualizar el ERP, se conserva el precio histórico de las ventas aprobadas si no cambiaron fecha, cliente, tipo de precio, producto ni kilos. Una huella técnica oculta (`_FirmaEntrada`, AC) permite detectar cambios reales en los datos del pedido.
 
 La prueba automática del Build 0.5.2 cubre el ciclo pedido → ticket → cobro posterior y verifica que cobrar no elimina ni transforma la venta.
+\n\n**Protección del histórico:** si una fila tiene corte y kilos pero H/I fueron vaciadas y se marcó como cobro, el Build 0.5.2 busca los valores comerciales en copias anteriores. Si no encuentra una coincidencia segura, detiene la actualización antes de guardar el maestro; no inventa el precio histórico usando la lista actual.
