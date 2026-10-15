@@ -87,6 +87,83 @@ def _ensure_audit_columns(ws):
     return columns
 
 
+
+
+def _prepare_cash_summary(ws, columns):
+    """Crea un resumen lateral sin insertar filas ni sobrescribir movimientos."""
+    title = "RESUMEN CAJA"
+    summary_col = next(
+        (
+            column
+            for column in range(1, ws.max_column + 1)
+            if _text(ws.cell(1, column).value) == title
+        ),
+        None,
+    )
+    if summary_col is None:
+        start_at = max(
+            column
+            for header, column in columns.items()
+            if header in CAJA_HEADERS + CAJA_AUDIT_HEADERS
+        ) + 2
+        for candidate in range(start_at, start_at + 40):
+            pair_is_empty = all(
+                ws.cell(row, column).value in (None, "")
+                for row in range(1, 8)
+                for column in (candidate, candidate + 1)
+            )
+            if pair_is_empty:
+                summary_col = candidate
+                break
+    if summary_col is None:
+        raise RuntimeError(
+            "No se encontró un espacio libre para el resumen de 07_CAJA. "
+            "No se sobrescribieron datos."
+        )
+
+    summary_rows = {
+        1: (title, None),
+        2: ("Ingresos registrados", "=SUM(G2:G10000)"),
+        3: ("Egresos registrados", "=SUM(H2:H10000)"),
+        4: ("Saldo neto registrado", "=SUM(G2:G10000)-SUM(H2:H10000)"),
+        5: ("Ajustes pendientes", '=COUNTIF(C2:C10000,"AJUSTE PENDIENTE")'),
+        6: ("Saldo inicial de efectivo", "No incluido"),
+        7: ("Nota", "Conciliá los ajustes antes de cerrar caja."),
+    }
+    label_letter = get_column_letter(summary_col)
+    value_letter = get_column_letter(summary_col + 1)
+
+    for row, (label, value) in summary_rows.items():
+        label_cell = ws.cell(row, summary_col)
+        value_cell = ws.cell(row, summary_col + 1)
+        label_cell.value = label
+        value_cell.value = value
+        label_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        value_cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+        if row == 1:
+            for cell in (label_cell, value_cell):
+                cell.fill = PatternFill("solid", fgColor="7A3E13")
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True
+                )
+        else:
+            label_cell.font = Font(bold=True, color="5B341B")
+            label_cell.fill = PatternFill("solid", fgColor="F4EDE7")
+            value_cell.fill = PatternFill("solid", fgColor="FBF8F5")
+            if row in (2, 3, 4):
+                value_cell.number_format = '$ #,##0.00;[Red]-$ #,##0.00'
+    ws.column_dimensions[label_letter].width = max(
+        ws.column_dimensions[label_letter].width or 0, 25
+    )
+    ws.column_dimensions[value_letter].width = max(
+        ws.column_dimensions[value_letter].width or 0, 45
+    )
+    ws.row_dimensions[1].height = max(ws.row_dimensions[1].height or 0, 30)
+    ws.row_dimensions[7].height = max(ws.row_dimensions[7].height or 0, 34)
+
+
 def preparar_caja(workbook):
     """Prepara Caja conservando los movimientos e incorporando revisión auditable."""
     ws = workbook["07_CAJA"] if "07_CAJA" in workbook.sheetnames else workbook.create_sheet("07_CAJA")
@@ -152,6 +229,7 @@ def preparar_caja(workbook):
         if ws.cell(1, column).comment is None:
             ws.cell(1, column).comment = Comment(text, "Carne Premium ERP")
 
+    _prepare_cash_summary(ws, columns)
     return ws
 
 
@@ -168,13 +246,14 @@ def _next_movement_id(ws, movement_col):
 
 
 def _last_movement_row(ws, columns):
-    """Busca el último movimiento real sin confundir fórmulas de saldo con datos."""
+    """Busca el último movimiento de A:L sin contar el resumen lateral."""
     ignored = {columns.get("Saldo")}
     last = 1
+    last_cash_column = max(columns.values())
     for row in range(2, ws.max_row + 1):
         if any(
             ws.cell(row, column).value not in (None, "")
-            for column in range(1, ws.max_column + 1)
+            for column in range(1, last_cash_column + 1)
             if column not in ignored
         ):
             last = row
@@ -254,7 +333,8 @@ def _mark_for_review(ws, columns, row, reason):
 def _sort_cash_rows(ws, columns):
     """Ordena todos los registros de caja por fecha; conserva cada movimiento y sus notas."""
     original_max_row = ws.max_row
-    last_column = max(ws.max_column, max(columns.values()))
+    # Resumen lateral permanece en su sitio: solo se ordenan las columnas de movimientos.
+    last_column = max(columns.values())
     saldo_column = columns["Saldo"]
     records = []
 
@@ -353,7 +433,11 @@ def sincronizar_ventas_en_caja(workbook):
     cash = preparar_caja(workbook)
     sales = workbook["05_VENTAS"]
     sc = _column_map(sales)
-    cc = _column_map(cash)
+    cc = {
+        name: column
+        for name, column in _column_map(cash).items()
+        if name in CAJA_HEADERS + CAJA_AUDIT_HEADERS
+    }
     required = [
         "VentaID", "Fecha", "Cliente", "Producto", "Importe",
         "PagoRecibido", "MedioPago", "EstadoVenta", "TipoRegistro",
