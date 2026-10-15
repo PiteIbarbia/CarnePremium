@@ -24,6 +24,7 @@ En `07_CAJA`:
 - `Ingreso` (G): dinero realmente recibido.
 - `Egreso` (H): dinero realmente entregado o pagado.
 - `Saldo` (I): saldo acumulado cronológico de ingresos menos egresos; no incluye un saldo inicial de efectivo.
+- El resumen lateral muestra ingresos, egresos, saldo neto registrado y cantidad de ajustes pendientes. El saldo neto es informativo: sin un saldo inicial cargado no equivale necesariamente al efectivo físico de la caja.
 - `Importe original` y `Observación / ajuste`: conservan la referencia y el motivo de movimientos automáticos que necesitan conciliación.
 - Las filas `AJUSTE PENDIENTE` se revisan contra `05_VENTAS` y los respaldos; no representan por sí solas una entrada o salida de dinero.
 
