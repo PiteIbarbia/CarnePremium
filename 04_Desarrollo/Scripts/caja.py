@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from openpyxl.comments import Comment
-from openpyxl.formatting.rule import CellIsRule
+from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -297,11 +297,26 @@ def _apply_cash_presentation(ws, columns, last_row):
             if column:
                 ws.cell(row, column).number_format = '$ #,##0.00;[Red]-$ #,##0.00'
 
-        if _text(ws.cell(row, columns["Tipo"]).value).upper() == "AJUSTE PENDIENTE":
-            for column in range(1, last_header_col + 1):
-                cell = ws.cell(row, column)
-                cell.fill = PatternFill("solid", fgColor="FFF2CC")
-                cell.font = Font(color="7F6000")
+    # Resaltar por el tipo de movimiento con formato condicional. Así el color
+    # acompaña al movimiento cuando se ordena la hoja en actualizaciones posteriores.
+    has_pending_rule = False
+    for conditional_range in ws.conditional_formatting:
+        for rule in ws.conditional_formatting[conditional_range]:
+            formula = [str(item) for item in (getattr(rule, "formula", []) or [])]
+            if any("AJUSTE PENDIENTE" in item for item in formula):
+                has_pending_rule = True
+                break
+        if has_pending_rule:
+            break
+    if not has_pending_rule:
+        ws.conditional_formatting.add(
+            f"A2:{get_column_letter(last_header_col)}10000",
+            FormulaRule(
+                formula=['$C2="AJUSTE PENDIENTE"'],
+                fill=PatternFill("solid", fgColor="FFF2CC"),
+                font=Font(color="7F6000"),
+            ),
+        )
 
     # No se eliminan reglas ajenas; se evita agregar una regla idéntica en cada Build.
     has_negative_rule = False
