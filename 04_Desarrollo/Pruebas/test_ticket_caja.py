@@ -217,7 +217,7 @@ def test_legacy_auto_reversals_are_audited_not_fake_expenses():
         assert cash.cell(row, cc["Ingreso"]).value == 0
         assert cash.cell(row, cc["Egreso"]).value == 0
         assert cash.cell(row, cc["Importe original"]).value == 12500
-        assert "revisión" in cash.cell(row, cc["Observación / ajuste"]).value.lower()
+        assert "revisar" in cash.cell(row, cc["Observación / ajuste"]).value.lower()
 
         # En este fixture solo hay ingresos positivos; una reversión heredada no debe
         # producir un saldo acumulado negativo simulando una salida de efectivo.
