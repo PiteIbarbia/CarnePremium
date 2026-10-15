@@ -246,6 +246,9 @@ def test_duplicate_auto_cash_movement_is_kept_for_audit():
             cash.cell(row, 7).value = 15000
             cash.cell(row, 8).value = 0
             cash.cell(row, 10).value = "VENTA_AUTO"
+        # Una columna adicional de usuario debe moverse junto con su movimiento.
+        cash["M2"] = "nota-movimiento-uno"
+        cash["M3"] = "nota-movimiento-dos"
 
         result = sincronizar_ventas_en_caja(wb)
         cc = {str(cash.cell(1, col).value): col for col in range(1, cash.max_column + 1) if cash.cell(1, col).value}
@@ -266,6 +269,12 @@ def test_duplicate_auto_cash_movement_is_kept_for_audit():
         assert income_total == 33000, (income_total, result)
         assert expense_total == 0, expense_total
         assert result["ajustes_pendientes"] == 1
+        row_by_id = {
+            str(cash.cell(row, 1).value): row
+            for row in range(2, result["movimientos"] + 2)
+        }
+        assert cash.cell(row_by_id["MOV000002"], 13).value == "nota-movimiento-uno"
+        assert cash.cell(row_by_id["MOV000003"], 13).value == "nota-movimiento-dos"
     finally:
         wb.close()
 
