@@ -24,7 +24,7 @@ En `07_CAJA`:
 - `Ingreso` (G): dinero realmente recibido.
 - `Egreso` (H): dinero realmente entregado o pagado.
 - `Saldo` (I): saldo acumulado cronológico de ingresos menos egresos; no incluye un saldo inicial de efectivo.
-- `Importe original` y `Observación / ajuste`:  conservan la referencia y el motivo de movimientos automáticos que necesitan conciliación.
+- `Importe original` y `Observación / ajuste`: conservan la referencia y el motivo de movimientos automáticos que necesitan conciliación.
 - Las filas `AJUSTE PENDIENTE` se revisan contra `05_VENTAS` y los respaldos; no representan por sí solas una entrada o salida de dinero.
 
 Los primeros diez encabezados de Caja se conservan por compatibilidad con el resto del sistema. Los movimientos no se borran para arreglar diferencias.
@@ -34,7 +34,7 @@ Los primeros diez encabezados de Caja se conservan por compatibilidad con el res
 1. Ingresá ventas en `05_VENTAS` usando los catálogos de clientes y productos.
 2. Registrá solo el importe cobrado realmente en `PagoRecibido` (W); dejalo vacío si todavía no se recibió dinero.
 3. Si el cobro es posterior a la venta, indicá `FechaCobro` (AB).
-4. Revisá el ticket en `06_TICKET`, los movimientos y ajustes de `07_CAJA`,  y el saldo de `09_CTACTE`.
+4. Revisá el ticket en `06_TICKET`, los movimientos y ajustes de `07_CAJA` y el saldo de `09_CTACTE`.
 5. Antes de cargar un lote histórico grande, mantené una copia de respaldo y revisá cualquier ajuste pendiente.
 
 ## Compatibilidad con Google Sheets
