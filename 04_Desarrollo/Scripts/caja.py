@@ -245,15 +245,22 @@ def _next_movement_id(ws, movement_col):
     return f"MOV{largest + 1:06d}"
 
 
+def _summary_columns(ws):
+    """Devuelve las columnas fijas del resumen lateral, si existe."""
+    for column in range(1, ws.max_column + 1):
+        if _text(ws.cell(1, column).value) == "RESUMEN CAJA":
+            return {column, column + 1}
+    return set()
+
+
 def _last_movement_row(ws, columns):
-    """Busca el último movimiento de A:L sin contar el resumen lateral."""
-    ignored = {columns.get("Saldo")}
+    """Busca el último movimiento ignorando el saldo calculado y el resumen lateral."""
+    ignored = {columns.get("Saldo")} | _summary_columns(ws)
     last = 1
-    last_cash_column = max(columns.values())
     for row in range(2, ws.max_row + 1):
         if any(
             ws.cell(row, column).value not in (None, "")
-            for column in range(1, last_cash_column + 1)
+            for column in range(1, ws.max_column + 1)
             if column not in ignored
         ):
             last = row
@@ -332,20 +339,20 @@ def _mark_for_review(ws, columns, row, reason):
 
 
 def _sort_cash_rows(ws, columns):
-    """Ordena todos los registros de caja por fecha; conserva cada movimiento y sus notas."""
+    """Ordena movimientos por fecha, conservando juntos sus datos y el resumen lateral."""
     original_max_row = ws.max_row
-    # Resumen lateral permanece en su sitio: solo se ordenan las columnas de movimientos.
-    last_column = max(columns.values())
+    last_column = ws.max_column
     saldo_column = columns["Saldo"]
+    fixed_columns = _summary_columns(ws)
     records = []
 
     for row in range(2, original_max_row + 1):
         values = [ws.cell(row, column).value for column in range(1, last_column + 1)]
-        # Excluir la fórmula I de la detección: una fórmula residual no es un movimiento.
+        # El saldo es fórmula derivada y el resumen lateral no pertenece a los movimientos.
         has_movement = any(
             value not in (None, "")
             for column, value in enumerate(values, start=1)
-            if column != saldo_column
+            if column != saldo_column and column not in fixed_columns
         )
         if has_movement:
             date_value = values[columns["Fecha"] - 1]
@@ -353,16 +360,17 @@ def _sort_cash_rows(ws, columns):
 
     records.sort(key=lambda item: (item[0][0], item[0][1], item[1]))
 
-    # Vaciar valores de la zona de movimientos para poder reescribir sin huecos.
-    # No se borran hojas, columnas ni identificadores; todas las celdas con datos
-    # de cada movimiento se copian juntas y permanecen auditables.
+    # Vaciar solamente las columnas de movimientos. Las columnas del resumen se
+    # quedan quietas; cualquier columna operativa adicional viaja con su movimiento.
     for row in range(2, original_max_row + 1):
         for column in range(1, last_column + 1):
-            ws.cell(row, column).value = None
+            if column not in fixed_columns:
+                ws.cell(row, column).value = None
 
     for target_row, (_, _, values) in enumerate(records, start=2):
         for column, value in enumerate(values, start=1):
-            ws.cell(target_row, column).value = value
+            if column not in fixed_columns:
+                ws.cell(target_row, column).value = value
 
     return len(records) + 1
 
