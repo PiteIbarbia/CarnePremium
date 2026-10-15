@@ -326,6 +326,7 @@ def _mark_for_review(ws, columns, row, reason):
     if note_column:
         ws.cell(row, note_column).value = (
             "Revisar contra 05_VENTAS y, si corresponde, las copias de respaldo. "
+            f"Motivo: {reason}. "
             "Este ajuste queda fuera del saldo hasta confirmar el movimiento real."
         )
 
