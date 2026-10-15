@@ -121,7 +121,7 @@ def main():
     )
 
     print(
-        "TEST MVP 0.5.2"
+        "TEST MVP 0.5.3"
     )
 
     print(
