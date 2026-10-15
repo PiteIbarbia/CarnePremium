@@ -1,23 +1,46 @@
 # Carne Premium ERP
 
-Proyecto local del Carne Premium ERP.
+Proyecto local de gestión de carnicería premium.
 
-Plataforma principal: Excel Professional Plus 2019.
-Compatibilidad objetivo: Google Sheets cuando sea técnicamente posible.
+- Plataforma operativa principal: Microsoft Excel Professional Plus 2019.
+- Compatibilidad objetivo: Google Sheets, cuando sea técnicamente viable.
+- Código, reglas y automatización: Python modular en `04_Desarrollo/Scripts`.
+- Control de versiones: Git y GitHub.
+- Archivo maestro único: `01_ERP/CarnePremiumERP.xlsx`.
 
-Regla: existe un único archivo maestro en `01_ERP/CarnePremiumERP.xlsx`.
-Las modificaciones estructurales se realizan mediante scripts en `04_Desarrollo/Scripts`.
+## Build 0.5.3 — Caja clara y ajustes auditables
 
+La venta sigue siendo el registro principal. Cobrar no transforma una venta en un registro `COBRO`; `TipoRegistro` (AA) es técnico y permanece oculto.
 
-## Flujo de venta, ticket y cobro — Build 0.5.2
+### Uso de Caja
 
-La venta sigue siendo el registro principal. **No se cambia a `COBRO` cuando el cliente paga**; `TipoRegistro` (AA) es técnico y queda oculto.
+- Las primeras diez columnas se mantienen para no romper las integraciones existentes.
+- Se agregan `Importe original` y `Observación / ajuste` para conservar una referencia de los movimientos automáticos que requieren revisión.
+- `Ingreso` y `Egreso` solo deben representar movimientos reales de dinero.
+- Las anulaciones automáticas heredadas y los duplicados se conservan como `AJUSTE PENDIENTE`, con importe original y explicación. No se convierten en egresos ficticios ni se eliminan silenciosamente.
+- Los movimientos se ordenan cronológicamente antes de recalcular `Saldo`.
+- `Saldo` es un acumulado de los movimientos registrados (ingresos menos egresos). No incluye un saldo inicial de efectivo.
+- Los ajustes pendientes se resaltan para conciliarlos contra `05_VENTAS` y las copias de respaldo. No se debe marcar como egreso una corrección técnica.
 
-1. En `05_VENTAS`, cargá cliente, tipo de precio, corte y kilos. La venta calcula precio e importe y queda disponible para generar/consultar su ticket aunque no se haya cobrado.
-2. Al recibir dinero, completá `MedioPago` (L) e `Importe cobrado` / `PagoRecibido` (W). Podés dejarlo en blanco mientras la venta esté pendiente. `EstadoCobro` (Y) y `SaldoTicket` (Z) se recalculan a partir del importe total del ticket y los cobros registrados.
-3. Si el dinero se recibe en una fecha posterior, completá `FechaCobro` (AB) con la fecha real. Si queda vacía, los procesos usan la fecha original de venta para conservar compatibilidad con los históricos previos.
-4. El ticket permanece en `06_TICKET` después del cobro. `07_CAJA` registra el dinero efectivamente recibido y `09_CTACTE` conserva la venta en su fecha y refleja el cobro en la fecha real cuando se indicó.
-5. Al actualizar el ERP, se conserva el precio histórico de las ventas aprobadas si no cambiaron fecha, cliente, tipo de precio, producto ni kilos. Una huella técnica oculta (`_FirmaEntrada`, AC) permite detectar cambios reales en los datos del pedido.
+### Flujo de venta, ticket y cobro
 
-La prueba automática del Build 0.5.2 cubre el ciclo pedido → ticket → cobro posterior y verifica que cobrar no elimina ni transforma la venta.
-\n\n**Protección del histórico:** si una fila tiene corte y kilos pero H/I fueron vaciadas y se marcó como cobro, el Build 0.5.2 busca los valores comerciales en copias anteriores. Si no encuentra una coincidencia segura, detiene la actualización antes de guardar el maestro; no inventa el precio histórico usando la lista actual.
+1. En `05_VENTAS`, cargar cliente, tipo de precio, corte y kilos.
+2. Al recibir dinero, completar `MedioPago` (L) y `PagoRecibido` (W) con el importe realmente recibido.
+3. Si el cobro ocurre en otra fecha, indicar `FechaCobro` (AB).
+4. Verificar el ticket en `06_TICKET`; caja y cuenta corriente se regeneran desde las ventas y cobros registrados.
+5. No editar las columnas técnicas ocultas ni borrar movimientos de `07_CAJA` para corregir una diferencia. Usar las observaciones y revisar la fuente del movimiento.
+
+La validación automatizada cubre el flujo venta → ticket → cobro, la conservación del histórico, la neutralización auditable de anulaciones automáticas y el control de movimientos duplicados.
+
+## Operación segura
+
+1. Cerrar el archivo maestro en Excel antes de ejecutar el proceso de actualización.
+2. Ejecutar `ACTUALIZAR_ERP.bat`.
+3. Confirmar que terminen correctamente el Build, `test_mvp.py` y `test_ticket_caja.py`.
+4. Revisar `05_VENTAS`, `06_TICKET`, `07_CAJA` y `09_CTACTE` antes de seguir con cargas masivas.
+
+El monitor local y el proceso manual no deben ejecutarse al mismo tiempo. Google Sheets no ejecuta el generador local ni los archivos BAT; su automatización requerirá una integración propia.
+
+## Próximas etapas del plan
+
+Tras estabilizar ventas, ticket, cobros y Caja, continuar con compras/stock real, precios históricos, dashboard profesional, recuperación ante desastres e integraciones futuras. No se considera listo el stock real hasta definir entradas, compras, mermas y existencias iniciales.
