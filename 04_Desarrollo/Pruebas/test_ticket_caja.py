@@ -10,7 +10,7 @@ from openpyxl import Workbook
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "Scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from caja import sincronizar_ventas_en_caja
+from caja import preparar_caja, sincronizar_ventas_en_caja
 from cuenta_corriente import sincronizar_cuenta_corriente
 from motor_comercial import find_client, find_product
 from ticket import preparar_ticket
@@ -186,9 +186,94 @@ def test_backup_recovers_cleared_historical_sale_values():
         wb.close()
 
 
+
+
+def test_legacy_auto_reversals_are_audited_not_fake_expenses():
+    """Las anulaciones heredadas no deben crear egresos artificiales ni borrar el importe."""
+    wb = make_workbook()
+    try:
+        cash = preparar_caja(wb)
+        cash["A2"] = "MOV000099"
+        cash["B2"] = datetime(2026, 10, 9, 9, 0)
+        cash["C2"] = "ANULACION"
+        cash["D2"] = "Anulación automática: VEN000999"
+        cash["E2"] = "VEN000999"
+        cash["F2"] = "Efectivo"
+        cash["G2"] = 0
+        cash["H2"] = 12500
+        cash["I2"] = -12500
+        cash["J2"] = "VENTA_AUTO_ANULADA"
+
+        result = sincronizar_ventas_en_caja(wb)
+        revisions = [
+            row for row in range(2, cash.max_row + 1)
+            if cash.cell(row, 10).value == "VENTA_AUTO_REVISION"
+            and cash.cell(row, 5).value == "VEN000999"
+        ]
+        assert len(revisions) == 1, result
+        row = revisions[0]
+        cc = {str(cash.cell(1, col).value): col for col in range(1, cash.max_column + 1) if cash.cell(1, col).value}
+        assert cash.cell(row, cc["Tipo"]).value == "AJUSTE PENDIENTE"
+        assert cash.cell(row, cc["Ingreso"]).value == 0
+        assert cash.cell(row, cc["Egreso"]).value == 0
+        assert cash.cell(row, cc["Importe original"]).value == 12500
+        assert "revisión" in cash.cell(row, cc["Observación / ajuste"]).value.lower()
+
+        # En este fixture solo hay ingresos positivos; una reversión heredada no debe
+        # producir un saldo acumulado negativo simulando una salida de efectivo.
+        running = 0
+        for movement_row in range(2, result["movimientos"] + 2):
+            running += float(cash.cell(movement_row, cc["Ingreso"]).value or 0)
+            running -= float(cash.cell(movement_row, cc["Egreso"]).value or 0)
+            assert running >= 0, (movement_row, running)
+        assert result["ajustes_pendientes"] == 1
+    finally:
+        wb.close()
+
+
+def test_duplicate_auto_cash_movement_is_kept_for_audit():
+    """Los duplicados se conservan marcados y no duplican el efectivo."""
+    wb = make_workbook()
+    try:
+        cash = preparar_caja(wb)
+        for row in (2, 3):
+            cash.cell(row, 1).value = f"MOV{row:06d}"
+            cash.cell(row, 2).value = datetime(2026, 10, 11, 10, 0)
+            cash.cell(row, 3).value = "INGRESO"
+            cash.cell(row, 4).value = "Cobro histórico duplicado"
+            cash.cell(row, 5).value = "VEN000001"
+            cash.cell(row, 6).value = "Efectivo"
+            cash.cell(row, 7).value = 15000
+            cash.cell(row, 8).value = 0
+            cash.cell(row, 10).value = "VENTA_AUTO"
+
+        result = sincronizar_ventas_en_caja(wb)
+        cc = {str(cash.cell(1, col).value): col for col in range(1, cash.max_column + 1) if cash.cell(1, col).value}
+        review_rows = [
+            row for row in range(2, result["movimientos"] + 2)
+            if cash.cell(row, cc["Origen"]).value == "VENTA_AUTO_REVISION"
+            and "duplicado" in str(cash.cell(row, cc["Observación / ajuste"]).value).lower()
+        ]
+        active_rows = [
+            row for row in range(2, result["movimientos"] + 2)
+            if cash.cell(row, cc["Origen"]).value == "VENTA_AUTO"
+            and cash.cell(row, cc["ReferenciaVenta"]).value == "VEN000001"
+        ]
+        income_total = sum(float(cash.cell(row, cc["Ingreso"]).value or 0) for row in range(2, result["movimientos"] + 2))
+        expense_total = sum(float(cash.cell(row, cc["Egreso"]).value or 0) for row in range(2, result["movimientos"] + 2))
+        assert len(review_rows) == 1, (review_rows, result)
+        assert len(active_rows) == 1, active_rows
+        assert income_total == 33000, (income_total, result)
+        assert expense_total == 0, expense_total
+        assert result["ajustes_pendientes"] == 1
+    finally:
+        wb.close()
+
 def main():
     test_backup_recovers_cleared_historical_sale_values()
     test_order_payment_does_not_remove_sale_or_ticket()
+    test_legacy_auto_reversals_are_audited_not_fake_expenses()
+    test_duplicate_auto_cash_movement_is_kept_for_audit()
     wb = make_workbook()
     try:
         # Regresión: nunca se deben copiar textos de fórmulas de ID a Ventas.
