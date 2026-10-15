@@ -28,10 +28,10 @@ from ventas_excel import procesar_todas_las_ventas, firma_entrada_venta
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.5.2"
+BUILD_VERSION = "0.5.3"
 
 BUILD_NAME = (
-    "Build 0.5.2 - Ciclo de venta y cobro con ticket histórico"
+    "Build 0.5.3 - Caja clara, saldo cronológico y ajustes auditables"
 )
 
 MAX_ROWS = 500
