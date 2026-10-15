@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.5.2"
+EXPECTED_VERSION = "0.5.3"
 
 EXPECTED_BUILD_NAME = (
-    "Build 0.5.2 - Ciclo de venta y cobro con ticket histórico"
+    "Build 0.5.3 - Caja clara, saldo cronológico y ajustes auditables"
 )
 
 # ============================================================
@@ -706,6 +706,18 @@ def main():
         if [caja.cell(1, column).value for column in range(1, 11)] != caja_headers:
             fail("07_CAJA: encabezados incorrectos.")
 
+        cash_headers = {
+            str(caja.cell(1, column).value).strip(): column
+            for column in range(1, caja.max_column + 1)
+            if caja.cell(1, column).value not in (None, "")
+        }
+        if "Importe original" not in cash_headers or "Observación / ajuste" not in cash_headers:
+            fail("07_CAJA: faltan las columnas de auditoría de ajustes.")
+        if caja.freeze_panes != "D2":
+            fail("07_CAJA: la fila de encabezados y las columnas clave no están inmovilizadas.")
+        if not caja.auto_filter.ref or not caja.auto_filter.ref.startswith("A1:"):
+            fail("07_CAJA: falta el filtro de movimientos.")
+
         # ====================================================
         # DASHBOARD
         # ====================================================
@@ -771,7 +783,7 @@ def main():
         )
 
         print(
-            "OK: BUILD 0.4.0 VALIDADO"
+            "OK: BUILD 0.5.3 VALIDADO"
         )
 
         print(
@@ -783,7 +795,7 @@ def main():
         )
 
         print(
-            "Versión 0.4.0: OK"
+            "Versión 0.5.3: OK"
         )
 
         print(
