@@ -141,8 +141,9 @@ def preparar_caja(workbook):
         "I": "Saldo acumulado de los movimientos ordenados por fecha: ingresos menos egresos. No incluye un saldo inicial de efectivo.",
     }
     for address, text in header_comments.items():
-        if ws[address].comment is None:
-            ws[address].comment = Comment(text, "Carne Premium ERP")
+        header_cell = ws[f"{address}1"]
+        if header_cell.comment is None:
+            header_cell.comment = Comment(text, "Carne Premium ERP")
     for header, text in {
         "Importe original": "Importe conservado solo como referencia cuando un movimiento automático queda pendiente de revisión. No suma ni resta al saldo.",
         "Observación / ajuste": "Explica por qué el movimiento necesita revisión. Una marca de revisión no acredita por sí sola una entrada o salida real de dinero.",
