@@ -321,14 +321,21 @@ def main():
         second_account = sincronizar_cuenta_corriente(wb)
         assert second_cash["agregados"] == 0, second_cash
         assert second_cash["actualizados"] == 3, second_cash
-        assert cash.max_row == 4, "Se duplicaron movimientos al repetir el proceso."
+        assert second_cash["movimientos"] == 3, second_cash
+        assert cash["N1"].value == "RESUMEN CAJA"
+        assert cash["O2"].value == "=SUM(G2:G10000)"
+        assert cash["O3"].value == "=SUM(H2:H10000)"
+        assert cash["O4"].value == "=SUM(G2:G10000)-SUM(H2:H10000)"
+        assert cash["O5"].value == '=COUNTIF(C2:C10000,"AJUSTE PENDIENTE")'
+        assert cash["N6"].value == "Saldo inicial de efectivo"
+        assert cash["O6"].value == "No incluido"
 
         # Editar un cobro existente actualiza el movimiento correspondiente, no crea otro.
         wb["05_VENTAS"]["W2"] = 16000
         third_cash = sincronizar_ventas_en_caja(wb)
         sincronizar_cuenta_corriente(wb)
         assert third_cash["agregados"] == 0, third_cash
-        assert cash.max_row == 4
+        assert third_cash["movimientos"] == 3, third_cash
         assert cash.cell(by_ref["VEN000001"], 7).value == 16000
 
         # Cuenta Corriente suma ventas, cobros de ventas y cobros posteriores.
