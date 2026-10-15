@@ -16,6 +16,8 @@ En `05_VENTAS`, elegí cliente en la columna D y producto en F desde los catálo
 
 Los primeros diez encabezados se mantienen por compatibilidad. Se agregan dos columnas de auditoría: `Importe original` y `Observación / ajuste`.
 
+A la derecha de la tabla se muestra un resumen automático de ingresos, egresos, saldo neto registrado y cantidad de ajustes pendientes. Ese saldo no incluye el efectivo existente al inicio del período; si no se registra un saldo inicial, el saldo neto puede diferir del dinero físico disponible.
+
 - **Ingreso (G):** dinero realmente recibido.
 - **Egreso (H):** dinero realmente pagado o entregado.
 - **Saldo (I):** acumulado cronológico de ingresos menos egresos registrados. No incluye saldo inicial de caja.
