@@ -718,6 +718,23 @@ def main():
         if not caja.auto_filter.ref or not caja.auto_filter.ref.startswith("A1:"):
             fail("07_CAJA: falta el filtro de movimientos.")
 
+        summary_column = next(
+            (
+                column for column in range(1, caja.max_column + 1)
+                if caja.cell(1, column).value == "RESUMEN CAJA"
+            ),
+            None,
+        )
+        if summary_column is None:
+            fail("07_CAJA: falta el resumen rápido.")
+        for offset, expected_formula in (
+            (1, "=SUM(G2:G10000)"),
+            (2, "=SUM(H2:H10000)"),
+            (3, "=SUM(G2:G10000)-SUM(H2:H10000)"),
+        ):
+            if caja.cell(2 + offset - 1, summary_column + 1).value != expected_formula:
+                fail(f"07_CAJA: fórmula incorrecta en el resumen, fila {offset + 1}.")
+
         # ====================================================
         # DASHBOARD
         # ====================================================
