@@ -11,14 +11,19 @@ if not exist "%~dp0.venv\Scripts\python.exe" (
     exit /b 2
 )
 
-"%~dp0.venv\Scripts\python.exe" "%~dp0\04_Desarrollo\Scripts\actualizar_erp.py"
+echo Carne Premium ERP - actualizacion segura
+echo Primero se construye y valida una copia temporal.
+echo El maestro solo se reemplaza si todas las pruebas pasan.
+echo Se crea y verifica un respaldo antes de aplicar el resultado.
+echo.
+"%~dp0.venv\Scripts\python.exe" "%~dp0\04_Desarrollo\Scripts\actualizar_erp.py" --aplicar
 set "RESULTADO=%ERRORLEVEL%"
 
 echo.
 if not "%RESULTADO%"=="0" (
-    echo La actualizacion no termino correctamente. Revisa el mensaje anterior.
+    echo La actualizacion fue cancelada o fallo. El libro operativo no debe considerarse actualizado.
 ) else (
-    echo Actualizacion finalizada. El libro se abrio para revision.
+    echo Actualizacion validada y aplicada. Se creo un respaldo previo.
 )
 pause
 exit /b %RESULTADO%
