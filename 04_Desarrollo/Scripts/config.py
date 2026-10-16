@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 
 # ============================================================
@@ -24,9 +25,12 @@ EXPORT_DIR = PROJECT_ROOT / "05_Exportaciones"
 # ARCHIVO MAESTRO
 # ============================================================
 
+# El actualizador puede aislar el build mediante una ruta temporal.
+_master_override = os.environ.get("CARNEPREMIUM_MASTER_FILE", "").strip()
 MASTER_FILE = (
-    ERP_DIR /
-    "CarnePremiumERP.xlsx"
+    Path(_master_override).expanduser().resolve()
+    if _master_override
+    else ERP_DIR / "CarnePremiumERP.xlsx"
 )
 
 
@@ -34,7 +38,7 @@ MASTER_FILE = (
 # VERSIONAMIENTO
 # ============================================================
 
-CURRENT_VERSION = "0.1.5"
+CURRENT_VERSION = "0.5.3"
 
 
 # ============================================================

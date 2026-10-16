@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 # CONFIGURACIÓN DEL TEST
 # ============================================================
 
-EXPECTED_VERSION = "0.1.5"
+EXPECTED_VERSION = "0.5.3"
 
 EXPECTED_BUILD_NAME = (
-    "MVP 0.1.5 - Ofertas automáticas en Ventas"
+    "Build 0.5.3 - Caja clara, saldo cronológico y ajustes auditables"
 )
 
 # ============================================================
@@ -121,7 +121,7 @@ def main():
     )
 
     print(
-        "TEST MVP 0.1.5"
+        "TEST MVP 0.5.3"
     )
 
     print(
@@ -566,7 +566,13 @@ def main():
             "TipoAplicado",
             "MotivoPrecio",
             "OfertaID",
-            "OfertaNombre"
+            "OfertaNombre",
+            "PrecioEspecialID",
+            "PagoRecibido",
+            "_TicketLineaKey",
+            "EstadoCobro",
+            "SaldoTicket",
+            "TipoRegistro"
         ]
 
         actual_sales_headers = [
@@ -602,19 +608,30 @@ def main():
         # Fórmulas críticas
         # ----------------------------------------------------
 
-        formula_cells = [
+        # La clave de ticket X se materializa como texto en preparar_ticket(),
+        # no debe exigirse como fórmula: así el Ticket funciona aunque Excel
+        # todavía no haya recalculado las fórmulas auxiliares.
+        formula_cells = ["A2", "Y2", "Z2"]
 
-            "A2",
-            "B2",
-            "C2",
-            "H2",
-            "I2",
-            "J2",
-            "K2",
-            "O2",
-            "P2",
-            "Q2"
-        ]
+        row_has_data = any(
+            sales.cell(2, column).value not in (None, "")
+            for column in (4, 6, 7)
+        )
+        if not row_has_data:
+            formula_cells.extend(
+                ["B2", "C2", "H2", "I2", "J2", "K2", "O2", "P2", "Q2"]
+            )
+        else:
+            if sales["Q2"].value in (None, ""):
+                fail("05_VENTAS!Q2 no contiene el estado de procesamiento.")
+            if str(sales["Q2"].value).strip().upper() == "OK":
+                ticket_key = sales["X2"].value
+                if (
+                    not isinstance(ticket_key, str)
+                    or not ticket_key.startswith("T-")
+                    or "|" not in ticket_key
+                ):
+                    fail("05_VENTAS!X2 no contiene una clave de ticket materializada.")
 
         for address in formula_cells:
 
@@ -647,31 +664,76 @@ def main():
 
         # ----------------------------------------------------
         # Validaciones de Ventas
-        #
-        # Cliente y Producto NO tienen lista desplegable.
-        # Se escriben por nombre.
-        #
-        # Solo TipoPrecio y MedioPago tienen listas.
         # ----------------------------------------------------
 
-        validation_count = len(
-            sales
-            .data_validations
-            .dataValidation
-        )
+        sales_validations = {
+            str(cell_range): validation.formula1
+            for validation in sales.data_validations.dataValidation
+            for cell_range in validation.sqref.ranges
+        }
+        required_sales_ranges = {
+            "D2:D501": "=ListaClientes",
+            "F2:F501": "=ListaProductos",
+        }
+        for target_range, expected_formula in required_sales_ranges.items():
+            if sales_validations.get(target_range) != expected_formula:
+                fail(
+                    f"05_VENTAS: falta el selector de {target_range}; "
+                    f"se esperaba {expected_formula!r} y se encontró "
+                    f"{sales_validations.get(target_range)!r}."
+                )
 
-        if validation_count < 2:
-
-            fail(
-                "05_VENTAS: "
-                "faltan las 2 validaciones "
-                "esperadas (TipoPrecio y MedioPago)."
-            )
+        if "ListaClientes" not in workbook.defined_names:
+            fail("Falta el rango con nombre ListaClientes.")
+        if "ListaProductos" not in workbook.defined_names:
+            fail("Falta el rango con nombre ListaProductos.")
 
         print(
             "Ventas: OK"
         )
 
+        ticket = workbook["06_TICKET"]
+        if [ticket.cell(8, column).value for column in range(1, 5)] != [
+            "Corte", "Kg", "Precio por kg", "Importe"
+        ]:
+            fail("06_TICKET: faltan encabezados de detalle.")
+
+        caja_headers = [
+            "MovimientoID", "Fecha", "Tipo", "Concepto", "ReferenciaVenta",
+            "MedioPago", "Ingreso", "Egreso", "Saldo", "Origen",
+        ]
+        caja = workbook["07_CAJA"]
+        if [caja.cell(1, column).value for column in range(1, 11)] != caja_headers:
+            fail("07_CAJA: encabezados incorrectos.")
+
+        cash_headers = {
+            str(caja.cell(1, column).value).strip(): column
+            for column in range(1, caja.max_column + 1)
+            if caja.cell(1, column).value not in (None, "")
+        }
+        if "Importe original" not in cash_headers or "Observación / ajuste" not in cash_headers:
+            fail("07_CAJA: faltan las columnas de auditoría de ajustes.")
+        if caja.freeze_panes != "D2":
+            fail("07_CAJA: la fila de encabezados y las columnas clave no están inmovilizadas.")
+        if not caja.auto_filter.ref or not caja.auto_filter.ref.startswith("A1:"):
+            fail("07_CAJA: falta el filtro de movimientos.")
+
+        summary_column = next(
+            (
+                column for column in range(1, caja.max_column + 1)
+                if caja.cell(1, column).value == "RESUMEN CAJA"
+            ),
+            None,
+        )
+        if summary_column is None:
+            fail("07_CAJA: falta el resumen rápido.")
+        for offset, expected_formula in (
+            (1, "=SUM(G2:G10000)"),
+            (2, "=SUM(H2:H10000)"),
+            (3, "=SUM(G2:G10000)-SUM(H2:H10000)"),
+        ):
+            if caja.cell(2 + offset - 1, summary_column + 1).value != expected_formula:
+                fail(f"07_CAJA: fórmula incorrecta en el resumen, fila {offset + 1}.")
 
         # ====================================================
         # DASHBOARD
@@ -738,7 +800,7 @@ def main():
         )
 
         print(
-            "OK: MVP 0.1.5 VALIDADO"
+            "OK: BUILD 0.5.3 VALIDADO"
         )
 
         print(
@@ -750,7 +812,7 @@ def main():
         )
 
         print(
-            "Versión 0.1.5: OK"
+            "Versión 0.5.3: OK"
         )
 
         print(

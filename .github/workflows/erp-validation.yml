@@ -1,0 +1,22 @@
+name: ERP validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: python -m pip install -r 04_Desarrollo/requirements.txt
+      - name: Validate script syntax
+        run: python -m py_compile 04_Desarrollo/Scripts/actualizar_erp.py 04_Desarrollo/Scripts/monitor_erp.py 04_Desarrollo/Scripts/builder.py 04_Desarrollo/Pruebas/test_mvp.py 04_Desarrollo/Pruebas/test_ticket_caja.py
+      - name: Build and test in an isolated temporary copy
+        run: python 04_Desarrollo/Scripts/actualizar_erp.py
