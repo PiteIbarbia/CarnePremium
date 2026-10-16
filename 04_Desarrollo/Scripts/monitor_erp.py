@@ -1,38 +1,25 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MASTER_FILE = PROJECT_ROOT / "01_ERP" / "CarnePremiumERP.xlsx"
-STATE_FILE = MASTER_FILE.parent / ".build_state.json"
-LOCK_FILE = MASTER_FILE.parent / f"~${MASTER_FILE.name}"
-SCRIPTS_DIR = PROJECT_ROOT / "04_Desarrollo" / "Scripts"
-TESTS_DIR = PROJECT_ROOT / "04_Desarrollo" / "Pruebas"
+LOCK_FILE = MASTER_FILE.parent / ("~$" + MASTER_FILE.name)
+UPDATER = PROJECT_ROOT / "04_Desarrollo" / "Scripts" / "actualizar_erp.py"
 POLL_SECONDS = 2
 STABLE_SECONDS = 5
 
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def read_built_hash() -> str | None:
-    try:
-        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        value = state.get("sha256")
-        return value if isinstance(value, str) else None
-    except (OSError, json.JSONDecodeError):
-        return None
 
 
 def signature(path: Path) -> tuple[int, int] | None:
@@ -44,55 +31,55 @@ def signature(path: Path) -> tuple[int, int] | None:
 
 
 def refresh() -> bool:
-    steps = [
-        ("Generando ventas, Caja, Cuenta Corriente, tickets y reportes", SCRIPTS_DIR / "builder.py"),
-        ("Validando el libro generado", TESTS_DIR / "test_mvp.py"),
-        ("Probando Ticket, Caja y Cuenta Corriente", TESTS_DIR / "test_ticket_caja.py"),
-    ]
-    for label, script in steps:
-        print()
-        print("=" * 72, flush=True)
-        print(label, flush=True)
-        print("=" * 72, flush=True)
-        result = subprocess.run([sys.executable, str(script)], cwd=PROJECT_ROOT)
-        if result.returncode != 0:
-            print(
-                f"ERROR: {script.name} terminó con código {result.returncode}. "
-                "Corregí el problema y guardá el libro otra vez.",
-                flush=True,
-            )
-            return False
-    print("ERP ACTUALIZADO Y VALIDADO.", flush=True)
+    print()
+    print("=" * 72, flush=True)
+    print("Validando una copia temporal antes de aplicar cambios", flush=True)
+    print("=" * 72, flush=True)
+    result = subprocess.run(
+        [sys.executable, str(UPDATER), "--aplicar"],
+        cwd=PROJECT_ROOT,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(
+            f"ERROR: el actualizador seguro terminó con código {result.returncode}. "
+            "El libro no se considera actualizado.",
+            flush=True,
+        )
+        return False
+    print("ERP actualizado después de superar todas las pruebas.", flush=True)
     return True
 
 
 def main() -> int:
     print("=" * 72)
-    print("CARNE PREMIUM ERP — MONITOR DE ACTUALIZACIÓN")
+    print("CARNE PREMIUM ERP — MONITOR DE ACTUALIZACIÓN SEGURA")
     print("=" * 72)
     print(f"Libro observado: {MASTER_FILE}")
-    print("Dejá esta ventana abierta. Guardá y cerrá el libro Excel para activar la actualización.")
-    print("Para detener el monitor, presioná Ctrl+C en esta ventana.")
-    print("")
+    print("El monitor valida en una copia temporal antes de reemplazar el maestro.")
+    print("Guardá y cerrá Excel para que pueda procesar el libro.")
+    print("Para detenerlo, presioná Ctrl+C.")
 
-    last_signature = None
+    last_signature = signature(MASTER_FILE)
+    last_hash = None
     stable_since = time.monotonic()
     attempted_hash = None
 
+    if MASTER_FILE.exists():
+        try:
+            last_hash = sha256_file(MASTER_FILE)
+        except OSError:
+            pass
+
     try:
         while True:
-            if not MASTER_FILE.exists():
+            if not MASTER_FILE.exists() or LOCK_FILE.exists():
+                stable_since = time.monotonic()
                 time.sleep(POLL_SECONDS)
                 continue
 
             current_signature = signature(MASTER_FILE)
             if current_signature is None:
-                time.sleep(POLL_SECONDS)
-                continue
-
-            if LOCK_FILE.exists():
-                last_signature = current_signature
-                stable_since = time.monotonic()
                 time.sleep(POLL_SECONDS)
                 continue
 
@@ -112,8 +99,7 @@ def main() -> int:
                 time.sleep(POLL_SECONDS)
                 continue
 
-            built_hash = read_built_hash()
-            if current_hash == built_hash:
+            if current_hash == last_hash:
                 attempted_hash = None
                 time.sleep(POLL_SECONDS)
                 continue
@@ -122,17 +108,21 @@ def main() -> int:
                 time.sleep(POLL_SECONDS)
                 continue
 
+            attempted_hash = current_hash
             print(
-                f"\nCambio detectado ({time.strftime('%Y-%m-%d %H:%M:%S')}). "
-                "Esperando archivo cerrado y estable: OK.",
+                f"\nCambio detectado ({time.strftime('%Y-%m-%d %H:%M:%S')}).",
                 flush=True,
             )
-            attempted_hash = current_hash
-            refresh()
+            if refresh():
+                try:
+                    last_hash = sha256_file(MASTER_FILE)
+                except OSError:
+                    last_hash = None
+            else:
+                # No reintenta automáticamente el mismo archivo indefinidamente.
+                last_hash = current_hash
             last_signature = signature(MASTER_FILE)
             stable_since = time.monotonic()
-            # Builder updates .build_state.json with the resulting file hash.
-            # If validation failed, do not retry the identical input every loop.
     except KeyboardInterrupt:
         print("\nMonitor detenido por el usuario.", flush=True)
         return 0
