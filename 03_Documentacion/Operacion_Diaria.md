@@ -28,14 +28,17 @@ Las anulaciones automáticas antiguas que anteriormente podían aparecer como eg
 
 La hoja ordena los movimientos por fecha y vuelve a calcular el saldo. Si una fila está resaltada como ajuste pendiente, revisá la referencia contra `05_VENTAS` y los respaldos antes de decidir cómo conciliarla. No borres filas ni cambies manualmente el saldo para hacer desaparecer la diferencia.
 
-## Actualizar y validar
+## Actualizar y validar de forma segura
 
-1. Guardá y cerrá el libro maestro `01_ERP/CarnePremiumERP.xlsx`.
-2. Ejecutá `ACTUALIZAR_ERP.bat` una sola vez.
-3. Confirmá que finalicen correctamente las pruebas del Build y las pruebas de Ticket/Caja/Cuenta Corriente.
-4. Revisá ventas, tickets, Caja y Cuenta Corriente antes de una carga masiva.
+El actualizador construye el resultado en un directorio temporal y corre todas las pruebas contra esa copia. El modo predeterminado solo valida: no reemplaza el libro de entrada.
 
-No ejecutes simultáneamente el monitor y el actualizador manual. Google Sheets no ejecuta los archivos BAT ni el generador local; esa automatización necesita una implementación independiente.
+1. Para validar el maestro sin aplicarle cambios, cerrá Excel y ejecutá `python 04_Desarrollo/Scripts/actualizar_erp.py`.
+2. Para validar el archivo de prueba sin reemplazarlo, ejecutá `python 04_Desarrollo/Scripts/actualizar_erp.py --archivo "01_ERP/CarnePremiumERP_prueba_036.xlsx"`.
+3. Para aplicar el resultado probado al maestro, cerrá Excel y ejecutá `python 04_Desarrollo/Scripts/actualizar_erp.py --aplicar`, o usá `ACTUALIZAR_ERP.bat`.
+4. El modo de aplicación crea y verifica un respaldo antes del reemplazo. Si falla una prueba, se cancela la aplicación.
+5. Revisá ventas, tickets, Caja y Cuenta Corriente en Excel Professional Plus 2019 antes de hacer una carga masiva.
+
+No ejecutes simultáneamente el monitor y el actualizador manual. El monitor utiliza la misma validación temporal. Esta protección tampoco sustituye una prueba visual real en Excel 2019.
 
 ## Próxima etapa
 
