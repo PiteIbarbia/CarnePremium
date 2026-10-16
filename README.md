@@ -32,14 +32,19 @@ La venta sigue siendo el registro principal. Cobrar no transforma una venta en u
 
 La validación automatizada cubre el flujo venta → ticket → cobro, la conservación del histórico, la neutralización auditable de anulaciones automáticas y el control de movimientos duplicados.
 
-## Operación segura
+## Actualización segura del libro
 
-1. Cerrar el archivo maestro en Excel antes de ejecutar el proceso de actualización.
-2. Ejecutar `ACTUALIZAR_ERP.bat`.
-3. Confirmar que terminen correctamente el Build, `test_mvp.py` y `test_ticket_caja.py`.
-4. Revisar `05_VENTAS`, `06_TICKET`, `07_CAJA` y `09_CTACTE` antes de seguir con cargas masivas.
+El actualizador primero construye una copia temporal del XLSX, ejecuta el constructor y termina las pruebas de estructura, Ticket, Caja y Cuenta Corriente. Por defecto, no reemplaza el archivo de entrada.
 
-El monitor local y el proceso manual no deben ejecutarse al mismo tiempo. Google Sheets no ejecuta el generador local ni los archivos BAT; su automatización requerirá una integración propia.
+- Solo validar el maestro sin reemplazarlo: `python 04_Desarrollo/Scripts/actualizar_erp.py`
+- Validar una copia de prueba: `python 04_Desarrollo/Scripts/actualizar_erp.py --archivo "01_ERP/CarnePremiumERP_prueba_036.xlsx"`
+- Aplicar el resultado validado al maestro: `python 04_Desarrollo/Scripts/actualizar_erp.py --aplicar`
+- `ACTUALIZAR_ERP.bat` utiliza el último modo, que solo aplica después de una validación exitosa y crea un respaldo verificado.
+- El monitor automático usa el mismo actualizador seguro. No lo ejecutes a la vez que el actualizador manual.
+
+Antes de aplicar, cerrá Excel y revisá que no haya cambios concurrentes. Si falla cualquier prueba, el resultado se rechaza y el libro de entrada no se reemplaza. La validación automática no sustituye la inspección visual con Excel Professional Plus 2019; el resultado debe revisarse en una copia antes de una carga masiva.
+
+Google Sheets no ejecuta los scripts Python ni archivos BAT locales. Su automatización requiere una integración separada.
 
 ## Próximas etapas del plan
 
