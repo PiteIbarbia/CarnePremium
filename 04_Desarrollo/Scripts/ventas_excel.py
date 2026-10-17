@@ -1,15 +1,29 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+import hashlib
 
-from motor_comercial import determinar_precio_venta
-
-from motor_comercial import (
-    determinar_precio_venta
-)
+from motor_comercial import determinar_precio_venta, find_client
 
 
 STATUS_OK = "OK"
+
+
+def firma_entrada_venta(ws, fila: int) -> str:
+    """Huella estable de los campos que determinan el precio de una venta."""
+    parts = []
+    for column in (2, 4, 5, 6, 7):  # fecha, cliente, tipo precio, producto, kilos
+        value = ws.cell(fila, column).value
+        if isinstance(value, datetime):
+            normalized = value.date().isoformat()
+        elif isinstance(value, date):
+            normalized = value.isoformat()
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            normalized = format(float(value), ".12g")
+        else:
+            normalized = str(value or "").strip()
+        parts.append(normalized)
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 def procesar_venta_excel(
@@ -75,10 +89,24 @@ def procesar_venta_excel(
         fila,
         2
     ).value
+    hora_venta = ws.cell(
+        fila,
+        3
+    ).value
+    ahora = datetime.now()
 
-    if not fecha_venta:
-
-        fecha_venta = datetime.now()
+    # Fijar fecha y hora al procesar para que no cambien con TODAY/NOW.
+    if (
+        fecha_venta in (None, "")
+        or (isinstance(fecha_venta, str) and fecha_venta.startswith("="))
+    ):
+        fecha_venta = ahora
+        ws.cell(fila, 2).value = fecha_venta
+    if (
+        hora_venta in (None, "")
+        or (isinstance(hora_venta, str) and hora_venta.startswith("="))
+    ):
+        ws.cell(fila, 3).value = ahora
 
     # ========================================================
     # MOTOR COMERCIAL
@@ -115,7 +143,7 @@ def procesar_venta_excel(
         # Limpiar campos comerciales
         for columna in range(
             18,
-            22
+            23
         ):
 
             ws.cell(
@@ -270,6 +298,14 @@ def procesar_venta_excel(
         "oferta_nombre"
     )
 
+    # ID del precio especial aplicado (columna V).
+    ws.cell(
+        fila,
+        22
+    ).value = resultado.get(
+        "precio_especial_id"
+    )
+
     # ========================================================
     # ESTADO
     # ========================================================
@@ -306,7 +342,77 @@ def procesar_venta_excel(
         11
     ).number_format = "0.0%"
 
+    # AB (FechaCobro) es opcional. Se conserva cuando el pago se registra
+    # después; si no hay importe cobrado, no debe quedar una fecha de pago.
+    try:
+        pago_actual = float(ws.cell(fila, 23).value or 0)
+    except (TypeError, ValueError):
+        pago_actual = 0
+    if pago_actual <= 0:
+        ws.cell(fila, 28).value = None
+    ws.cell(fila, 28).number_format = "dd/mm/yyyy"
+
     return resultado
+
+
+def procesar_cobro_excel(workbook, fila: int):
+    """Valida y persiste un cobro de saldo anterior ingresado desde 05_VENTAS."""
+    ws = workbook["05_VENTAS"]
+    cliente_nombre = ws.cell(fila, 4).value
+    medio_pago = str(ws.cell(fila, 12).value or "").strip()
+    importe_cobrado = ws.cell(fila, 23).value
+    fecha = ws.cell(fila, 2).value
+    hora = ws.cell(fila, 3).value
+    ahora = datetime.now()
+
+    if fecha in (None, "") or (isinstance(fecha, str) and fecha.startswith("=")):
+        fecha = ahora
+        ws.cell(fila, 2).value = fecha
+    if hora in (None, "") or (isinstance(hora, str) and hora.startswith("=")):
+        ws.cell(fila, 3).value = ahora
+
+    try:
+        importe_cobrado = float(importe_cobrado)
+    except (TypeError, ValueError):
+        importe_cobrado = None
+
+    client = find_client(workbook, cliente_nombre)
+    if client is None:
+        estado = "CLIENTE NO ENCONTRADO"
+    elif str(client.get("estado") or "").strip().casefold() != "activo":
+        estado = "CLIENTE INACTIVO"
+    elif importe_cobrado is None or importe_cobrado <= 0:
+        estado = "IMPORTE COBRO INVALIDO"
+    elif not medio_pago:
+        estado = "MEDIO DE PAGO REQUERIDO"
+    elif medio_pago.casefold().replace(" ", "") == "cuentacorriente":
+        estado = "COBRO NO VÁLIDO PARA CUENTA CORRIENTE"
+    else:
+        estado = "COBRO OK"
+
+    # Las filas COBRO no son ventas de carne; limpiar resultados comerciales
+    # para evitar que queden valores de una fila reutilizada.
+    for columna in (8, 9, 10, 11, 16, 18, 19, 20, 21, 22):
+        ws.cell(fila, columna).value = None
+    if client is not None:
+        ws.cell(fila, 15).value = client.get("id")
+    else:
+        ws.cell(fila, 15).value = None
+    ws.cell(fila, 17).value = estado
+    if estado == "COBRO OK":
+        fecha_cobro = ws.cell(fila, 28).value
+        if fecha_cobro in (None, "") or (isinstance(fecha_cobro, str) and fecha_cobro.startswith("=")):
+            ws.cell(fila, 28).value = fecha
+    else:
+        ws.cell(fila, 28).value = None
+    ws.cell(fila, 23).number_format = '$ #,##0.00'
+    ws.cell(fila, 28).number_format = "dd/mm/yyyy"
+    return {
+        "estado": estado,
+        "tipo_registro": "COBRO",
+        "importe_cobrado": importe_cobrado,
+        "cliente": cliente_nombre,
+    }
 
 
 def procesar_todas_las_ventas(
@@ -314,44 +420,60 @@ def procesar_todas_las_ventas(
     fila_inicio=2,
     fila_fin=501
 ):
-    """
-    Procesa todas las ventas no vacías.
-    """
-
+    """Procesa ventas de carne y cobros de saldo ingresados en 05_VENTAS."""
     resultados = []
+    ws = workbook["05_VENTAS"]
 
-    ws = workbook[
-        "05_VENTAS"
-    ]
+    for fila in range(fila_inicio, fila_fin + 1):
+        cliente = ws.cell(fila, 4).value
+        producto = str(ws.cell(fila, 6).value or "").strip()
+        kg = ws.cell(fila, 7).value
+        tipo_registro = str(ws.cell(fila, 27).value or "").strip().upper()
+        hay_detalle_venta = bool(producto) or kg not in (None, "")
 
-    for fila in range(
-        fila_inicio,
-        fila_fin + 1
-    ):
+        # Compatibilidad y protección de datos: si la fila conserva corte o
+        # kilos, es una venta aunque una versión anterior la haya marcado COBRO.
+        # Así no se borran H:K ni desaparece el ticket al reprocesar.
+        if hay_detalle_venta:
+            if tipo_registro != "VENTA":
+                ws.cell(fila, 27).value = "VENTA"
+            tipo_registro = "VENTA"
 
-        cliente = ws.cell(
-            fila,
-            4
-        ).value
-
-        producto = ws.cell(
-            fila,
-            6
-        ).value
-
-        if not cliente and not producto:
-
+        if tipo_registro == "COBRO":
+            if cliente or ws.cell(fila, 23).value not in (None, ""):
+                resultados.append(procesar_cobro_excel(workbook, fila))
             continue
 
-        resultado = (
-            procesar_venta_excel(
-                workbook,
-                fila
-            )
-        )
+        if not cliente and not producto and kg in (None, ""):
+            continue
 
-        resultados.append(
-            resultado
-        )
+        # Evitar recalcular ventas históricas aprobadas en cada actualización:
+        # su precio es una fotografía comercial. Solo se vuelve a procesar si
+        # cambian fecha/cliente/tipo de precio/producto/kg.
+        signature_col = 29 if ws.cell(1, 29).value == "_FirmaEntrada" else None
+        if signature_col:
+            current_signature = firma_entrada_venta(ws, fila)
+            stored_signature = str(ws.cell(fila, signature_col).value or "").strip()
+            current_status = str(ws.cell(fila, 17).value or "").strip().upper()
+            price = ws.cell(fila, 8).value
+            amount = ws.cell(fila, 9).value
+            if (
+                current_status == STATUS_OK
+                and stored_signature
+                and stored_signature == current_signature
+                and isinstance(price, (int, float))
+                and isinstance(amount, (int, float))
+            ):
+                continue
+
+        resultado = procesar_venta_excel(workbook, fila)
+        resultados.append(resultado)
+        if signature_col:
+            if str(ws.cell(fila, 17).value or "").strip().upper() == STATUS_OK:
+                # Recalcular la huella después del proceso, porque B puede
+                # haber pasado de TODAY() a una fecha fija.
+                ws.cell(fila, signature_col).value = firma_entrada_venta(ws, fila)
+            else:
+                ws.cell(fila, signature_col).value = None
 
     return resultados

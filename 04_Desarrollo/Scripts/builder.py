@@ -12,22 +12,26 @@ import uuid
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from config import MASTER_FILE, SHEETS
 
 from dashboard import preparar_dashboard
-from ventas_excel import procesar_todas_las_ventas
+from caja import sincronizar_ventas_en_caja
+from cuenta_corriente import sincronizar_cuenta_corriente
+from ticket import preparar_ticket
+from ventas_excel import procesar_todas_las_ventas, firma_entrada_venta
 
 
 # ============================================================
 # VERSION
 # ============================================================
 
-BUILD_VERSION = "0.1.5"
+BUILD_VERSION = "0.5.3"
 
 BUILD_NAME = (
-    "MVP 0.1.5 - Ventas + Ofertas automáticas"
+    "Build 0.5.3 - Caja clara, saldo cronológico y ajustes auditables"
 )
 
 MAX_ROWS = 500
@@ -197,6 +201,15 @@ def add_list_validation(
     )
 
     return validation
+
+
+def ensure_defined_range(workbook, name: str, reference: str):
+    """Crea o actualiza un rango con nombre compatible con Excel 2019."""
+    if name in workbook.defined_names:
+        del workbook.defined_names[name]
+    workbook.defined_names.add(
+        DefinedName(name=name, attr_text=reference)
+    )
 
 
 # ============================================================
@@ -615,6 +628,180 @@ def setup_products(
     ws.freeze_panes = "A2"
 
 
+
+# ============================================================
+# RECUPERACION SEGURA DE VENTAS HISTORICAS
+# ============================================================
+
+def _normalize_text(value):
+    return str(value or "").strip().casefold()
+
+
+def _date_key(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    try:
+        from datetime import date as _date
+        if isinstance(value, _date):
+            return value.isoformat()
+    except TypeError:
+        pass
+    return str(value or "").strip()[:10]
+
+
+def recover_legacy_sales_from_backups(workbook):
+    """
+    Recupera H:K de una copia histórica si una fila con producto y kilos fue
+    clasificada como COBRO y sus resultados comerciales quedaron vacíos.
+    Si no existe una copia segura, aborta antes de guardar el maestro; nunca
+    calcula a ciegas el precio histórico usando el catálogo actual.
+    """
+    if "05_VENTAS" not in workbook.sheetnames:
+        return {"restauradas": 0, "sin_cambios": 0}
+
+    ws = workbook["05_VENTAS"]
+    col = {
+        str(ws.cell(1, c).value).strip(): c
+        for c in range(1, ws.max_column + 1)
+        if ws.cell(1, c).value not in (None, "")
+    }
+    needed = {"Fecha", "Cliente", "Producto", "Kg", "PrecioKg", "Importe",
+              "Ganancia$", "Ganancia%", "EstadoVenta", "TipoRegistro"}
+    if not needed.issubset(col):
+        return {"restauradas": 0, "sin_cambios": 0}
+
+    to_recover = []
+    for row in range(2, min(MAX_ROWS, ws.max_row) + 1):
+        kind = _normalize_text(ws.cell(row, col["TipoRegistro"]).value)
+        if kind != "cobro":
+            continue
+        product = _normalize_text(ws.cell(row, col["Producto"]).value)
+        client = _normalize_text(ws.cell(row, col["Cliente"]).value)
+        try:
+            kg = float(ws.cell(row, col["Kg"]).value)
+        except (TypeError, ValueError):
+            continue
+        if not product or not client or kg <= 0:
+            continue
+        price = ws.cell(row, col["PrecioKg"]).value
+        amount = ws.cell(row, col["Importe"]).value
+        if isinstance(price, (int, float)) and not isinstance(price, bool) and isinstance(amount, (int, float)) and not isinstance(amount, bool):
+            continue
+        to_recover.append(row)
+
+    if not to_recover:
+        return {"restauradas": 0, "sin_cambios": 0}
+
+    backup_dir = MASTER_FILE.parent.parent / "02_Backups"
+    backups = sorted(
+        (
+            p for p in backup_dir.glob("CarnePremiumERP_before_*.xlsx")
+            if p.is_file() and not p.name.startswith("~$")
+        ),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ) if backup_dir.exists() else []
+
+    output_cols = {
+        "PrecioKg": 8, "Importe": 9, "Ganancia$": 10, "Ganancia%": 11,
+        "_ClienteID": 15, "_ProductoID": 16, "EstadoVenta": 17,
+        "TipoAplicado": 18, "MotivoPrecio": 19, "OfertaID": 20,
+        "OfertaNombre": 21, "PrecioEspecialID": 22,
+    }
+    missing = list(to_recover)
+    restored = 0
+
+    for backup_path in backups:
+        if not missing:
+            break
+        try:
+            backup_wb = load_workbook(backup_path, data_only=True, read_only=True)
+        except Exception:
+            continue
+        try:
+            if "05_VENTAS" not in backup_wb.sheetnames:
+                continue
+            old = backup_wb["05_VENTAS"]
+            old_cols = {
+                str(old.cell(1, c).value).strip(): c
+                for c in range(1, old.max_column + 1)
+                if old.cell(1, c).value not in (None, "")
+            }
+            required_old = {"Fecha", "Cliente", "Producto", "Kg", "PrecioKg", "Importe", "EstadoVenta"}
+            if not required_old.issubset(old_cols):
+                continue
+
+            # Match by row content, not by row number alone.
+            lookup = {}
+            for old_row in range(2, min(MAX_ROWS, old.max_row) + 1):
+                if _normalize_text(old.cell(old_row, old_cols["EstadoVenta"]).value) != "ok":
+                    continue
+                client = _normalize_text(old.cell(old_row, old_cols["Cliente"]).value)
+                product = _normalize_text(old.cell(old_row, old_cols["Producto"]).value)
+                day = _date_key(old.cell(old_row, old_cols["Fecha"]).value)
+                try:
+                    kg = round(float(old.cell(old_row, old_cols["Kg"]).value), 3)
+                    price = old.cell(old_row, old_cols["PrecioKg"]).value
+                    amount = old.cell(old_row, old_cols["Importe"]).value
+                except (TypeError, ValueError):
+                    continue
+                if not client or not product or kg <= 0:
+                    continue
+                if not isinstance(price, (int, float)) or isinstance(price, bool):
+                    continue
+                if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                    continue
+                key = (client, product, day, kg)
+                if key not in lookup:
+                    lookup[key] = old_row
+
+            for row in list(missing):
+                try:
+                    kg = round(float(ws.cell(row, col["Kg"]).value), 3)
+                except (TypeError, ValueError):
+                    continue
+                key = (
+                    _normalize_text(ws.cell(row, col["Cliente"]).value),
+                    _normalize_text(ws.cell(row, col["Producto"]).value),
+                    _date_key(ws.cell(row, col["Fecha"]).value),
+                    kg,
+                )
+                old_row = lookup.get(key)
+                if old_row is None:
+                    continue
+                for header, dest_col in output_cols.items():
+                    if header in old_cols:
+                        value = old.cell(old_row, old_cols[header]).value
+                        if value not in (None, "") or header in ("PrecioKg", "Importe", "EstadoVenta"):
+                            ws.cell(row, dest_col).value = value
+                if (
+                    isinstance(ws.cell(row, col["PrecioKg"]).value, (int, float))
+                    and isinstance(ws.cell(row, col["Importe"]).value, (int, float))
+                    and _normalize_text(ws.cell(row, col["EstadoVenta"]).value) == "ok"
+                ):
+                    missing.remove(row)
+                    restored += 1
+        finally:
+            backup_wb.close()
+
+    if missing:
+        rows = ", ".join(str(row) for row in missing)
+        raise RuntimeError(
+            "Actualización detenida para proteger el historial: 05_VENTAS contiene "
+            "filas con corte y kilos marcadas como COBRO, pero sin PrecioKg/Importe. "
+            f"No se encontró una copia anterior segura para restaurar las filas {rows}. "
+            "El Excel maestro no se guardó. Recuperá esas ventas desde una copia de "
+            "seguridad o revisá sus importes históricos antes de volver a actualizar."
+        )
+
+    # En cuanto el importe histórico ha sido recuperado, el registro vuelve
+    # a ser una venta y conserva sus datos comerciales originales.
+    for row in to_recover:
+        ws.cell(row, col["TipoRegistro"]).value = "VENTA"
+
+    return {"restauradas": restored, "sin_cambios": 0}
+
+
 # ============================================================
 # VENTAS
 # ============================================================
@@ -631,6 +818,75 @@ def setup_sales(
     clear_validations(
         ws
     )
+
+    # Fotografía de ventas históricas antes de reescribir fórmulas de la plantilla.
+    # El precio/importe de una venta confirmada no debe cambiar porque se actualice
+    # el ERP o se modifique el catálogo días después. Se usa _FirmaEntrada para
+    # reprocesar únicamente cuando cambian los campos que determinan esa venta.
+    historicas_a_preservar = {}
+    for old_row in range(2, MAX_ROWS + 1):
+        client_name = ws.cell(old_row, 4).value
+        product_name = ws.cell(old_row, 6).value
+        try:
+            kg_value = float(ws.cell(old_row, 7).value)
+            old_price = float(ws.cell(old_row, 8).value)
+            old_amount = float(ws.cell(old_row, 9).value)
+        except (TypeError, ValueError):
+            continue
+        old_status = str(ws.cell(old_row, 17).value or "").strip().upper()
+        if (
+            old_status != "OK"
+            or not str(client_name or "").strip()
+            or not str(product_name or "").strip()
+            or kg_value <= 0
+            or old_price <= 0
+            or old_amount < 0
+        ):
+            continue
+        signature_exists = ws.cell(1, 29).value == "_FirmaEntrada"
+        old_signature = (
+            str(ws.cell(old_row, 29).value or "").strip()
+            if signature_exists
+            else ""
+        )
+        # Build 0.5.1 no guardaba huella. En la primera migración se toma
+        # la venta actual como referencia para conservar su precio histórico.
+        baseline_signature = old_signature or firma_entrada_venta(ws, old_row)
+        snapshot = {
+            col: ws.cell(old_row, col).value
+            for col in (8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22)
+        }
+        historicas_a_preservar[old_row] = (snapshot, baseline_signature)
+
+    # Migración segura desde Build 0.3.6: W antes era TicketID manual.
+    # Si Caja ya tenía un cobro automático asociado a la venta, conserva su
+    # importe como PagoRecibido. No deduce el pago a partir de la venta bruta.
+    legacy_ticket_column = ws.cell(1, 23).value == "TicketID"
+    if legacy_ticket_column:
+        prior_cash_by_sale = {}
+        if "07_CAJA" in workbook.sheetnames:
+            old_cash = workbook["07_CAJA"]
+            old_cash_columns = {
+                str(old_cash.cell(1, col).value).strip(): col
+                for col in range(1, old_cash.max_column + 1)
+                if old_cash.cell(1, col).value not in (None, "")
+            }
+            if {"ReferenciaVenta", "Ingreso", "Origen"}.issubset(old_cash_columns):
+                for cash_row in range(2, old_cash.max_row + 1):
+                    if str(old_cash.cell(cash_row, old_cash_columns["Origen"]).value or "").strip() != "VENTA_AUTO":
+                        continue
+                    ref = str(old_cash.cell(cash_row, old_cash_columns["ReferenciaVenta"]).value or "").strip()
+                    income = old_cash.cell(cash_row, old_cash_columns["Ingreso"]).value
+                    if ref and isinstance(income, (int, float)) and income > 0:
+                        prior_cash_by_sale[ref] = float(income)
+
+        for old_row in range(2, MAX_ROWS + 1):
+            old_value = ws.cell(old_row, 23).value
+            if old_value in (None, "") or isinstance(old_value, (int, float)):
+                continue
+            sale_ref = f"VEN{old_row - 1:06d}"
+            migrated_receipt = prior_cash_by_sale.get(sale_ref)
+            ws.cell(old_row, 23).value = migrated_receipt if migrated_receipt is not None else None
 
     headers = [
 
@@ -660,7 +916,15 @@ def setup_sales(
         "TipoAplicado",
         "MotivoPrecio",
         "OfertaID",
-        "OfertaNombre"
+        "OfertaNombre",
+        "PrecioEspecialID",
+        "PagoRecibido",
+        "_TicketLineaKey",
+        "EstadoCobro",
+        "SaldoTicket",
+        "TipoRegistro",
+        "FechaCobro",
+        "_FirmaEntrada"
     ]
 
     set_headers(
@@ -690,25 +954,34 @@ def setup_sales(
 
         # ----------------------------------------------------
         # Fecha
-        # ----------------------------------------------------
-
-        ws.cell(
-            row,
-            2
-        ).value = (
-            f'=IF(A{row}="","",TODAY())'
-        )
+        # Fecha/hora calculadas se conservan después de persistirse
+        # por Python. Así no cambian en cada reconstrucción del libro.
+        date_cell = ws.cell(row, 2)
+        if (
+            date_cell.value in (None, "")
+            or (
+                isinstance(date_cell.value, str)
+                and date_cell.value.startswith("=")
+            )
+        ):
+            date_cell.value = (
+                f'=IF(A{row}="","",TODAY())'
+            )
 
         # ----------------------------------------------------
         # Hora
         # ----------------------------------------------------
-
-        ws.cell(
-            row,
-            3
-        ).value = (
-            f'=IF(A{row}="","",NOW())'
-        )
+        time_cell = ws.cell(row, 3)
+        if (
+            time_cell.value in (None, "")
+            or (
+                isinstance(time_cell.value, str)
+                and time_cell.value.startswith("=")
+            )
+        ):
+            time_cell.value = (
+                f'=IF(A{row}="","",NOW())'
+            )
 
         # ----------------------------------------------------
         # ClienteID interno
@@ -964,6 +1237,49 @@ def setup_sales(
         )
 
         # ----------------------------------------------------
+        # Ticket automático por cliente y día. B puede conservar hora
+        # en el valor datetime, por eso el agrupamiento compara el día completo.
+        ticket_count = (
+            f'COUNTIFS($O$2:O{row},O{row},'
+            f'$B$2:B{row},">="&INT(B{row}),'
+            f'$B$2:B{row},"<"&INT(B{row})+1,'
+            f'$Q$2:Q{row},"OK")'
+        )
+        ws.cell(row, 24).value = (
+            f'=IF(OR(A{row}="",B{row}="",O{row}=""),"",'
+            f'IF(Q{row}<>"OK","",'
+            f'"T-"&TEXT(B{row},"yyyymmdd")&"-"&O{row}&"|"&{ticket_count}))'
+        )
+
+        # ----------------------------------------------------
+        # Estado y saldo del ticket: ventas menos pagos del mismo cliente/día.
+        date_client_criteria = (
+            f'$O$2:$O$501,O{row},'
+            f'$B$2:$B$501,">="&INT(B{row}),'
+            f'$B$2:$B$501,"<"&INT(B{row})+1,'
+            f'$Q$2:$Q$501,"OK"'
+        )
+        ticket_total = f'SUMIFS($I$2:$I$501,{date_client_criteria})'
+        received_criteria = (
+            date_client_criteria
+            + ',$L$2:$L$501,"<>",$L$2:$L$501,"<>Cuenta Corriente"'
+        )
+        received_total = f'SUMIFS($W$2:$W$501,{received_criteria})'
+        rounded_total = f'ROUND({ticket_total},2)'
+        rounded_received = f'ROUND({received_total},2)'
+
+        ws.cell(row, 25).value = (
+            f'=IF(A{row}="","",IF(Q{row}<>"OK","",'
+            f'IF({rounded_total}<=0,"",'
+            f'IF({rounded_received}<=0,"PENDIENTE",'
+            f'IF({rounded_received}>{rounded_total},"A FAVOR",'
+            f'IF({rounded_received}={rounded_total},"PAGADO / OK","SALDO PENDIENTE"))))))'
+        )
+        ws.cell(row, 26).value = (
+            f'=IF(A{row}="","",IF(Q{row}<>"OK","",'
+            f'ROUND({ticket_total}-{received_total},2)))'
+        )
+
         # Formatos
         # ----------------------------------------------------
 
@@ -992,6 +1308,10 @@ def setup_sales(
         ).number_format = (
             "0.0%"
         )
+        ws.cell(row, 23).number_format = '$ #,##0.00'
+        ws.cell(row, 25).alignment = Alignment(horizontal="center")
+        ws.cell(row, 26).number_format = '$ #,##0.00'
+        ws.cell(row, 28).number_format = "dd/mm/yyyy"
 
         ws.cell(
             row,
@@ -1007,6 +1327,18 @@ def setup_sales(
             "hh:mm:ss"
         )
 
+    # Restaurar ventas ya confirmadas antes de procesar las filas.
+    # Esto evita recalcular importes históricos en una actualización rutinaria.
+    for old_row, (snapshot, baseline_signature) in historicas_a_preservar.items():
+        for col, value in snapshot.items():
+            ws.cell(old_row, col).value = value
+        current_kind = str(ws.cell(old_row, 27).value or "").strip().upper()
+        if current_kind == "COBRO":
+            # Con productos y kilos, una fila aprobada es una venta, no un cobro
+            # suelto. Se repara la clasificación sin perder precio ni ticket.
+            ws.cell(old_row, 27).value = "VENTA"
+        ws.cell(old_row, 29).value = baseline_signature
+
     # --------------------------------------------------------
     # Validaciones
     #
@@ -1016,6 +1348,18 @@ def setup_sales(
     # TipoPrecio + MedioPago:
     # listas controladas.
     # --------------------------------------------------------
+
+    # Listas de selección rápidas para los campos visibles D y F.
+    # Los rangos abarcan la capacidad operativa configurada para clientes/productos.
+    # Los nombres definidos evitan que la validación apunte directamente a otra hoja.
+    ensure_defined_range(
+        workbook, "ListaClientes", "'03_CLIENTES'!$B$2:$B$501"
+    )
+    ensure_defined_range(
+        workbook, "ListaProductos", "'04_PRODUCTOS'!$B$2:$B$501"
+    )
+    add_list_validation(ws, "D2:D501", "=ListaClientes")
+    add_list_validation(ws, "F2:F501", "=ListaProductos")
 
     add_list_validation(
         ws,
@@ -1029,6 +1373,23 @@ def setup_sales(
         "'02_CATALOGOS'!$C$2:$C$6"
     )
 
+    payment_amount_validation = DataValidation(
+        type="decimal",
+        operator="greaterThanOrEqual",
+        formula1="0",
+        allow_blank=True,
+    )
+    payment_amount_validation.errorTitle = "Importe de cobro inválido"
+    payment_amount_validation.error = "Ingresá un importe cobrado igual o mayor que cero."
+    payment_amount_validation.promptTitle = "Pago recibido"
+    payment_amount_validation.prompt = "Al cobrar, cargá el importe real en W y el medio en L. Si el pago fue otro día, indicá esa fecha en AB. Estado y saldo se actualizan automáticamente."
+    ws.add_data_validation(payment_amount_validation)
+    payment_amount_validation.add("W2:W501")
+
+    # TipoRegistro (AA) es técnico: no se edita durante el cobro.
+    # Las filas con producto/kg siempre permanecen como VENTA.
+
+
     # --------------------------------------------------------
     # Tabla
     # --------------------------------------------------------
@@ -1036,7 +1397,7 @@ def setup_sales(
     ensure_table(
         ws,
         "VentasTable",
-        "A1:U501"
+        "A1:AC501"
     )
 
     for column, width in {
@@ -1067,6 +1428,14 @@ def setup_sales(
         "S": 32,
         "T": 16,
         "U": 28,
+        "V": 20,
+        "W": 18,
+        "X": 24,
+        "Y": 22,
+        "Z": 18,
+        "AA": 20,
+        "AB": 16,
+        "AC": 18,
 
     }.items():
 
@@ -1082,6 +1451,13 @@ def setup_sales(
     ws.column_dimensions[
         "P"
     ].hidden = True
+
+    # V y X son técnicas; AA es técnico y no se cambia al cobrar.
+    # W es el importe recibido, Y/Z muestran estado y saldo, AB es FechaCobro.
+    ws.column_dimensions["V"].hidden = True
+    ws.column_dimensions["X"].hidden = True
+    ws.column_dimensions["AA"].hidden = True
+    ws.column_dimensions["AC"].hidden = True
 
     ws.freeze_panes = "A2"
 
@@ -1115,49 +1491,13 @@ def setup_home(
     )
 
     rows = [
-
-        (
-            "Flujo",
-            "Cliente → Producto → "
-            "Kg → Motor Comercial → "
-            "Precio → Venta"
-        ),
-
-        (
-            "Paso 1",
-            "Escribir nombre del cliente"
-        ),
-
-        (
-            "Paso 2",
-            "Escribir nombre del producto"
-        ),
-
-        (
-            "Paso 3",
-            "Cargar Kg"
-        ),
-
-        (
-            "Paso 4",
-            "El motor determina el precio"
-        ),
-
-        (
-            "Paso 5",
-            "Verificar precio aplicado "
-            "y motivo"
-        ),
-
-        (
-            "Estado",
-            "MVP 0.1.5"
-        ),
-
-        (
-            "Compatibilidad",
-            "Excel 2019 + Google Sheets"
-        ),
+        ("Flujo", "Pedido/venta → Ticket histórico → Cobro → Caja y Cuenta Corriente"),
+        ("Paso 1", "Cargá cliente, corte y kilos. La venta y su ticket quedan registrados aunque siga pendiente."),
+        ("Paso 2", "Al cobrar, completá MedioPago (L) e Importe cobrado (W)."),
+        ("Paso 3", "Si cobrás en otra fecha, ingresá la fecha real en FechaCobro (AB); si queda vacía, se usa la fecha de venta."),
+        ("Paso 4", "EstadoCobro (Y), SaldoTicket (Z), Caja y Cuenta Corriente se actualizan automáticamente."),
+        ("Importante", "No cambies TipoRegistro (AA) al cobrar. Es un campo técnico; la venta debe conservar su historial."),
+        ("Compatibilidad", "Excel 2019 + Google Sheets"),
     ]
 
     for row, (
@@ -1376,7 +1716,15 @@ def validate_before_save(
         "TipoAplicado",
         "MotivoPrecio",
         "OfertaID",
-        "OfertaNombre"
+        "OfertaNombre",
+        "PrecioEspecialID",
+        "PagoRecibido",
+        "_TicketLineaKey",
+        "EstadoCobro",
+        "SaldoTicket",
+        "TipoRegistro",
+        "FechaCobro",
+        "_FirmaEntrada"
     ]
 
     actual_headers = [
@@ -1404,39 +1752,30 @@ def validate_before_save(
         "05_VENTAS"
     ]
 
-    formula_cells = [
-        "A2",
-        "B2",
-        "C2",
-        "H2",
-        "I2",
-        "J2",
-        "K2",
-        "O2",
-        "P2",
-        "Q2"
-    ]
+    # A, Y y Z se conservan como fórmulas. X (_TicketLineaKey) se
+    # materializa como texto por preparar_ticket() para que MATCH no dependa
+    # del recálculo de fórmulas recién escritas en Excel.
+    for address in ("A2", "Y2", "Z2"):
+        value = sales[address].value
+        if not isinstance(value, str) or not value.startswith("="):
+            raise RuntimeError(f"Fórmula faltante: 05_VENTAS!{address}")
 
-    for address in formula_cells:
-
-        value = sales[
-            address
-        ].value
-
-        if (
-            not isinstance(
-                value,
-                str
-            )
-            or not value.startswith(
-                "="
-            )
-        ):
-
-            raise RuntimeError(
-                f"Fórmula faltante: "
-                f"05_VENTAS!{address}"
-            )
+    row_has_data = any(
+        sales.cell(2, column).value not in (None, "")
+        for column in (4, 6, 7)
+    )
+    if row_has_data:
+        if sales["Q2"].value in (None, ""):
+            raise RuntimeError("05_VENTAS!Q2 no tiene estado de procesamiento.")
+        if str(sales["Q2"].value).strip().upper() == "OK":
+            key = sales["X2"].value
+            if not isinstance(key, str) or not key.startswith("T-") or "|" not in key:
+                raise RuntimeError("05_VENTAS!X2 no contiene una clave materializada de ticket.")
+    else:
+        for address in ("B2", "C2", "H2", "I2", "J2", "K2", "O2", "P2", "Q2"):
+            value = sales[address].value
+            if not isinstance(value, str) or not value.startswith("="):
+                raise RuntimeError(f"Fórmula faltante: 05_VENTAS!{address}")
 
     # Validaciones
     if len(
@@ -1500,6 +1839,26 @@ def validate_before_save(
                 f"Dashboard!{address} "
                 f"no tiene fórmula válida."
             )
+
+    # Ticket: verificar encabezados de detalle y fórmulas.
+    ticket = workbook["06_TICKET"]
+    if [ticket.cell(8, column).value for column in range(1, 5)] != [
+        "Corte", "Kg", "Precio por kg", "Importe"
+    ]:
+        raise RuntimeError("06_TICKET: encabezados de detalle incorrectos.")
+    for address in ("A9", "B9", "C9", "D9", "D39"):
+        value = ticket[address].value
+        if not isinstance(value, str) or not value.startswith("="):
+            raise RuntimeError(f"06_TICKET!{address}: fórmula faltante.")
+
+    # Caja: validar estructura sin borrar movimientos existentes.
+    caja = workbook["07_CAJA"]
+    caja_headers = [
+        "MovimientoID", "Fecha", "Tipo", "Concepto", "ReferenciaVenta",
+        "MedioPago", "Ingreso", "Egreso", "Saldo", "Origen",
+    ]
+    if [caja.cell(1, column).value for column in range(1, 11)] != caja_headers:
+        raise RuntimeError("07_CAJA: encabezados incorrectos.")
 
     # Version
     version = workbook[
@@ -1578,6 +1937,13 @@ def atomic_save(
         parents=True,
         exist_ok=True
     )
+
+    # Forzar recálculo de fórmulas auxiliares al abrir en Excel.
+    calculation = getattr(workbook, "calculation", None)
+    if calculation is not None:
+        calculation.fullCalcOnLoad = True
+        calculation.forceFullCalc = True
+        calculation.calcMode = "auto"
 
     token = (
         f"{BUILD_VERSION}-"
@@ -1738,7 +2104,7 @@ def main():
     )
 
     print(
-        "BUILD 0.1.5"
+        f"BUILD {BUILD_VERSION}"
     )
 
     print(
@@ -1752,7 +2118,13 @@ def main():
     )
 
     print(
-        "[1/7] Parámetros..."
+        "[0/9] Comprobando que las ventas históricas se puedan preservar..."
+    )
+    recovery = recover_legacy_sales_from_backups(workbook)
+    print(f"Ventas históricas restauradas desde backup: {recovery['restauradas']}")
+
+    print(
+        "[1/9] Parámetros..."
     )
 
     setup_parameters(
@@ -1760,7 +2132,7 @@ def main():
     )
 
     print(
-        "[2/7] Catálogos..."
+        "[2/9] Catálogos..."
     )
 
     setup_catalogs(
@@ -1768,7 +2140,7 @@ def main():
     )
 
     print(
-        "[3/7] Clientes..."
+        "[3/9] Clientes..."
     )
 
     setup_clients(
@@ -1776,7 +2148,7 @@ def main():
     )
 
     print(
-        "[4/7] Productos..."
+        "[4/9] Productos..."
     )
 
     setup_products(
@@ -1784,7 +2156,7 @@ def main():
     )
 
     print(
-        "[5/7] Ventas..."
+        "[5/9] Ventas..."
     )
 
     setup_sales(
@@ -1792,7 +2164,7 @@ def main():
     )
 
     print(
-        "[6/7] Dashboard..."
+        "[6/9] Dashboard..."
     )
 
     preparar_dashboard(
@@ -1812,7 +2184,7 @@ def main():
     # ========================================================
 
     print(
-        "[7/7] Integrando motor comercial..."
+        "[7/9] Integrando motor comercial..."
     )
 
     resultados = (
@@ -1825,6 +2197,17 @@ def main():
         f"Ventas procesadas: "
         f"{len(resultados)}"
     )
+
+    print("Sincronizando cobros reales con Caja...")
+    cash_result = sincronizar_ventas_en_caja(workbook)
+    print(f"Caja: {cash_result}")
+
+    print("Sincronizando Cuenta Corriente...")
+    account_result = sincronizar_cuenta_corriente(workbook)
+    print(f"Cuenta Corriente: {account_result}")
+
+    print("Preparando Ticket automático...")
+    preparar_ticket(workbook)
 
     print()
     print(
@@ -1865,11 +2248,11 @@ def main():
     print()
 
     print(
-        "MVP 0.1.5 INTEGRADO"
+        f"BUILD {BUILD_VERSION} INTEGRADO"
     )
 
     print(
-        "Ventas + Ofertas + Dashboard: OK"
+        "Ventas + Ticket automático + Cobros + Caja + Cuenta Corriente + Dashboard: OK"
     )
 
     print()
