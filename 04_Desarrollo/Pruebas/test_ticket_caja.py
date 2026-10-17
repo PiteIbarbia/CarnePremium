@@ -329,6 +329,31 @@ def main():
         preparar_ticket(wb)
         second_account = sincronizar_cuenta_corriente(wb)
         assert second_cash["agregados"] == 0, second_cash
+
+        # Panel superior de Cuenta Corriente: deudas de clientes, créditos y estados.
+        account = wb["09_CTACTE"]
+        assert account["A1"].value == "CUENTA CORRIENTE — RESUMEN Y MOVIMIENTOS"
+        assert account["A5"].value == "A COBRAR DE CLIENTES"
+        assert account["C5"].value == "SALDOS A FAVOR DE CLIENTES"
+        assert account["E5"].value == "CLIENTES QUE DEBEN"
+        assert account["G5"].value == "CLIENTES CON SALDO A FAVOR"
+        assert account["I5"].value == "CLIENTES AL DÍA"
+        assert second_account["a_cobrar_clientes"] == 17000, second_account
+        assert second_account["clientes_que_deben"] == 2, second_account
+        assert second_account["saldos_a_favor_clientes"] == 0, second_account
+        assert account["A6"].value == 17000
+        assert account["E6"].value == 2
+        assert account["I6"].value == 0
+        assert account["A8"].value == "RESUMEN POR CLIENTE — ¿QUIÉN ME DEBE?"
+        assert account["A9"].value == "ClienteID"
+        assert account["F9"].value == "Saldo actual"
+        detail_headers = [
+            account.cell(row, 1).value
+            for row in range(1, account.max_row + 1)
+            if account.cell(row, 1).value == "MOVIMIENTOS POR DÍA — HISTORIAL DE CADA CLIENTE"
+        ]
+        assert detail_headers, "Falta el detalle diario debajo del resumen."
+
         assert second_cash["actualizados"] == 3, second_cash
         assert second_cash["movimientos"] == 3, second_cash
         assert cash["N1"].value == "RESUMEN CAJA"
