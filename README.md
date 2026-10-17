@@ -32,6 +32,16 @@ La venta sigue siendo el registro principal. Cobrar no transforma una venta en u
 
 La validación automatizada cubre el flujo venta → ticket → cobro, la conservación del histórico, la neutralización auditable de anulaciones automáticas y el control de movimientos duplicados.
 
+## Cuenta Corriente — lectura rápida
+
+La hoja `09_CTACTE` se presenta en tres partes:
+
+1. **Indicadores superiores:** total a cobrar de clientes, saldos a favor de clientes, cantidad de clientes que deben, clientes con crédito y clientes al día.
+2. **Resumen por cliente:** una fila por cliente con kilos vendidos, ventas registradas, cobros registrados, saldo actual y último movimiento. `TE DEBE` significa saldo pendiente de cobro; `SALDO A FAVOR` significa que los pagos superan las ventas registradas; `AL DÍA` significa saldo cero.
+3. **Movimientos por día:** detalle cronológico de ventas y cobros que explica cómo se forma el saldo de cada cliente.
+
+El saldo se calcula como ventas registradas menos cobros de ventas y cobros de deudas anteriores. La hoja se reconstruye desde `05_VENTAS`; no escribas saldos manuales en ella. Las cuentas a pagar a proveedores todavía no están integradas: se incorporarán con el módulo de Compras/Proveedores, sin inventar deudas.
+
 ## Actualización segura del libro
 
 El actualizador primero construye una copia temporal del XLSX, ejecuta el constructor y termina las pruebas de estructura, Ticket, Caja y Cuenta Corriente. Por defecto, no reemplaza el archivo de entrada.
