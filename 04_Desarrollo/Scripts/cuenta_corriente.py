@@ -196,29 +196,190 @@ def sincronizar_cuenta_corriente(workbook):
             if not payment_group["ticket_id"]:
                 payment_group["ticket_id"] = ticket_id
 
-    ws = workbook["09_CTACTE"] if "09_CTACTE" in workbook.sheetnames else workbook.create_sheet("09_CTACTE")
-    ws.sheet_view.showGridLines = False
-
-    # Esta hoja es un reporte generado; su contenido se reconstruye desde Ventas.
-    for row in range(1, max(ws.max_row, 501) + 1):
-        for col in range(1, len(ACCOUNT_HEADERS) + 1):
-            ws.cell(row, col).value = None
-
-    for col, header in enumerate(ACCOUNT_HEADERS, start=1):
-        cell = ws.cell(1, col)
-        cell.value = header
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="7A3E13")
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
+    # Preparar saldos y resumen por cliente antes de escribir la vista.
     running = {}
-    ordered = sorted(groups.values(), key=lambda item: (item["fecha"], item["cliente"].casefold(), item["cliente_id"]))
-    for row, item in enumerate(ordered, start=2):
-        day_balance = round(item["ventas"] - item["cobros_ventas"] - item["cobros_deuda"], 2)
+    customer_totals = {}
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            item["fecha"],
+            item["cliente"].casefold(),
+            item["cliente_id"],
+        ),
+    )
+    ledger_rows = []
+    for item in ordered:
+        day_balance = round(
+            item["ventas"] - item["cobros_ventas"] - item["cobros_deuda"], 2
+        )
         prior_balance = running.get(item["cliente_id"], 0.0)
         ending_balance = round(prior_balance + day_balance, 2)
         running[item["cliente_id"]] = ending_balance
-        state = _state(ending_balance)
+        ledger_rows.append((item, day_balance, ending_balance, _state(ending_balance)))
+
+        total = customer_totals.setdefault(
+            item["cliente_id"],
+            {
+                "cliente_id": item["cliente_id"],
+                "cliente": item["cliente"],
+                "kg": 0.0,
+                "ventas": 0.0,
+                "cobros": 0.0,
+                "saldo": 0.0,
+                "ultima_fecha": item["fecha"],
+                "registros": 0,
+            },
+        )
+        total["kg"] += item["kg"]
+        total["ventas"] += item["ventas"]
+        total["cobros"] += item["cobros_ventas"] + item["cobros_deuda"]
+        total["saldo"] += day_balance
+        total["ultima_fecha"] = max(total["ultima_fecha"], item["fecha"])
+        total["registros"] += item["registros"]
+
+    customer_rows = sorted(
+        customer_totals.values(),
+        key=lambda item: (item["cliente"].casefold(), item["cliente_id"]),
+    )
+    due_from_customers = round(
+        sum(max(round(item["saldo"], 2), 0) for item in customer_rows), 2
+    )
+    customer_credits = round(
+        sum(abs(min(round(item["saldo"], 2), 0)) for item in customer_rows), 2
+    )
+    customers_owing = sum(1 for item in customer_rows if round(item["saldo"], 2) > 0.005)
+    customers_in_credit = sum(1 for item in customer_rows if round(item["saldo"], 2) < -0.005)
+    customers_settled = sum(
+        1 for item in customer_rows if abs(round(item["saldo"], 2)) <= 0.005
+    )
+
+    ws = (
+        workbook["09_CTACTE"]
+        if "09_CTACTE" in workbook.sheetnames
+        else workbook.create_sheet("09_CTACTE")
+    )
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 85
+    ws.sheet_properties.tabColor = "7A3E13"
+    ws.freeze_panes = "A10"
+
+    # Esta hoja es un reporte generado. Se reconstruye desde 05_VENTAS.
+    clear_to = max(ws.max_row, 501, len(customer_rows) + len(ledger_rows) + 20)
+    for row in range(1, clear_to + 1):
+        for col in range(1, 13):
+            ws.cell(row, col).value = None
+            ws.cell(row, col).fill = PatternFill(fill_type=None)
+            ws.cell(row, col).font = Font()
+            ws.cell(row, col).alignment = Alignment()
+
+    title_fill = PatternFill("solid", fgColor="7A3E13")
+    section_fill = PatternFill("solid", fgColor="E9D8C9")
+    header_fill = PatternFill("solid", fgColor="7A3E13")
+    card_fill = PatternFill("solid", fgColor="F7F1EC")
+    title_font = Font(bold=True, color="FFFFFF", size=14)
+    section_font = Font(bold=True, color="5B341B", size=11)
+    header_font = Font(bold=True, color="FFFFFF")
+    label_font = Font(bold=True, color="5B341B")
+    money_format = '$ #,##0.00;[Red]-$ #,##0.00'
+
+    ws["A1"] = "CUENTA CORRIENTE — RESUMEN Y MOVIMIENTOS"
+    for col in range(1, 13):
+        cell = ws.cell(1, col)
+        cell.fill = title_fill
+        cell.font = title_font
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 32
+
+    ws["A2"] = "Lectura rápida: saldo positivo = el cliente te debe; saldo negativo = saldo a favor del cliente."
+    ws["A3"] = (
+        "Cuentas a pagar a proveedores: pendiente de integrar con Compras/Proveedores. "
+        "No se muestran deudas estimadas ni inventadas."
+    )
+    for row in (2, 3):
+        ws.cell(row, 1).font = Font(italic=True, color="5B341B")
+        ws.cell(row, 1).alignment = Alignment(vertical="center", wrap_text=True)
+    ws.row_dimensions[2].height = 24
+    ws.row_dimensions[3].height = 30
+
+    cards = [
+        (1, "A COBRAR DE CLIENTES", due_from_customers, "money"),
+        (3, "SALDOS A FAVOR DE CLIENTES", customer_credits, "money"),
+        (5, "CLIENTES QUE DEBEN", customers_owing, "count"),
+        (7, "CLIENTES CON SALDO A FAVOR", customers_in_credit, "count"),
+        (9, "CLIENTES AL DÍA", customers_settled, "count"),
+    ]
+    for start_col, label, value, value_type in cards:
+        label_cell = ws.cell(5, start_col, label)
+        value_cell = ws.cell(6, start_col, value)
+        label_cell.font = label_font
+        label_cell.fill = section_fill
+        label_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        value_cell.font = Font(bold=True, size=12, color="7A3E13")
+        value_cell.fill = card_fill
+        value_cell.alignment = Alignment(vertical="center")
+        if value_type == "money":
+            value_cell.number_format = money_format
+    ws.row_dimensions[5].height = 34
+    ws.row_dimensions[6].height = 26
+
+    customer_headers = [
+        "ClienteID", "Cliente", "Kg vendidos", "Ventas históricas",
+        "Cobros registrados", "Saldo actual", "Estado", "Último movimiento",
+    ]
+    summary_title_row = 8
+    summary_header_row = 9
+    ws.cell(summary_title_row, 1, "RESUMEN POR CLIENTE — ¿QUIÉN ME DEBE?")
+    for col in range(1, len(customer_headers) + 1):
+        ws.cell(summary_title_row, col).fill = section_fill
+        ws.cell(summary_title_row, col).font = section_font
+    for col, header in enumerate(customer_headers, start=1):
+        cell = ws.cell(summary_header_row, col, header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row, item in enumerate(customer_rows, start=summary_header_row + 1):
+        balance = round(item["saldo"], 2)
+        state = _state(balance)
+        if balance > 0.005:
+            state = "TE DEBE"
+        elif balance < -0.005:
+            state = "SALDO A FAVOR"
+        else:
+            state = "AL DÍA"
+        values = [
+            item["cliente_id"],
+            item["cliente"],
+            round(item["kg"], 3),
+            round(item["ventas"], 2),
+            round(item["cobros"], 2),
+            balance,
+            state,
+            item["ultima_fecha"],
+        ]
+        for col, value in enumerate(values, start=1):
+            ws.cell(row, col, value)
+        ws.cell(row, 3).number_format = "0.000"
+        for col in (4, 5, 6):
+            ws.cell(row, col).number_format = money_format
+        ws.cell(row, 8).number_format = "dd/mm/yyyy"
+        ws.cell(row, 7).alignment = Alignment(horizontal="center")
+
+    detail_title_row = summary_header_row + len(customer_rows) + 2
+    detail_header_row = detail_title_row + 1
+    ws.cell(detail_title_row, 1, "MOVIMIENTOS POR DÍA — HISTORIAL DE CADA CLIENTE")
+    for col in range(1, len(ACCOUNT_HEADERS) + 1):
+        ws.cell(detail_title_row, col).fill = section_fill
+        ws.cell(detail_title_row, col).font = section_font
+    for col, header in enumerate(ACCOUNT_HEADERS, start=1):
+        cell = ws.cell(detail_header_row, col, header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row, (item, day_balance, ending_balance, state) in enumerate(
+        ledger_rows, start=detail_header_row + 1
+    ):
         values = [
             item["fecha"],
             item["cliente_id"],
@@ -234,19 +395,30 @@ def sincronizar_cuenta_corriente(workbook):
             item["registros"],
         ]
         for col, value in enumerate(values, start=1):
-            ws.cell(row, col).value = value
+            ws.cell(row, col, value)
         ws.cell(row, 1).number_format = "dd/mm/yyyy"
         ws.cell(row, 4).number_format = "0.000"
         for col in (5, 6, 7, 8, 9):
-            ws.cell(row, col).number_format = '$ #,##0.00'
+            ws.cell(row, col).number_format = money_format
         ws.cell(row, 10).alignment = Alignment(horizontal="center")
 
     widths = {
-        "A": 14, "B": 17, "C": 30, "D": 14, "E": 17, "F": 18,
-        "G": 22, "H": 17, "I": 19, "J": 18, "K": 28, "L": 19,
+        "A": 16, "B": 18, "C": 30, "D": 14, "E": 19, "F": 19,
+        "G": 23, "H": 19, "I": 19, "J": 19, "K": 30, "L": 19,
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:L{max(1, len(ordered) + 1)}"
-    return {"grupos_cliente_dia": len(ordered), "clientes": len(running)}
+    ws.row_dimensions[summary_header_row].height = 34
+    ws.row_dimensions[detail_header_row].height = 34
+    ws.auto_filter.ref = f"A{summary_header_row}:H{summary_header_row + len(customer_rows)}"
+    ws.freeze_panes = f"A{summary_header_row + 1}"
+
+    return {
+        "grupos_cliente_dia": len(ordered),
+        "clientes": len(running),
+        "a_cobrar_clientes": due_from_customers,
+        "saldos_a_favor_clientes": customer_credits,
+        "clientes_que_deben": customers_owing,
+        "clientes_con_saldo_a_favor": customers_in_credit,
+        "clientes_al_dia": customers_settled,
+    }
