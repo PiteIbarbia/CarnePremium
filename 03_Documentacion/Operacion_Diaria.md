@@ -12,6 +12,18 @@ En `05_VENTAS`, elegí cliente en la columna D y producto en F desde los catálo
 - Una venta a cuenta corriente sin dinero recibido no es un ingreso de Caja.
 - Una fila separada de tipo `COBRO` se utiliza para cobrar saldos anteriores; debe dejar producto y kilos vacíos para no generar otra línea de carne en el ticket.
 
+## Entender 09_CTACTE — quién debe y qué falta cobrar
+
+La hoja `09_CTACTE` tiene tres zonas:
+
+1. **Resumen superior:** muestra cuánto queda por cobrar a clientes, cuánto hay a favor de clientes y cuántos están debiendo, a favor o al día.
+2. **Resumen por cliente:** consultá el nombre del cliente y la columna `Saldo actual`. Un saldo positivo significa que el cliente todavía debe dinero; un saldo negativo significa que tiene dinero a favor; cero significa que está al día.
+3. **Movimientos por día:** muestra las ventas y los cobros registrados y el saldo acumulado que se arrastra entre fechas.
+
+La cuenta se obtiene de las ventas históricas y de los importes realmente cobrados. Un cobro en una fecha posterior reduce el saldo en su fecha de cobro; no borra ni cambia la venta original. No edites manualmente esta hoja: el actualizador la vuelve a generar desde `05_VENTAS`.
+
+**Importante:** esta vista responde quién debe dinero a la carnicería. Las deudas que la carnicería tenga con proveedores aún no se calculan porque falta integrar Compras/Proveedores y sus pagos; no se mostrarán importes inventados.
+
 ## Leer la hoja 07_CAJA
 
 Los primeros diez encabezados se mantienen por compatibilidad. Se agregan dos columnas de auditoría: `Importe original` y `Observación / ajuste`.
