@@ -71,6 +71,70 @@ def run_step(label: str, script: Path, env: dict[str, str]) -> bool:
     return True
 
 
+
+def report_pending_adjustments(path: Path) -> int:
+    """Imprime, sin modificar el libro, las filas de Caja que requieren conciliación."""
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, data_only=True, read_only=True)
+    try:
+        if "07_CAJA" not in workbook.sheetnames:
+            print("AVISO: el libro generado no contiene 07_CAJA.")
+            return 0
+
+        ws = workbook["07_CAJA"]
+        columns = {
+            str(ws.cell(1, column).value).strip(): column
+            for column in range(1, ws.max_column + 1)
+            if ws.cell(1, column).value not in (None, "")
+        }
+        required = ("Tipo", "Fecha", "Concepto", "ReferenciaVenta", "Origen",
+                    "Ingreso", "Egreso", "Importe original", "Observación / ajuste")
+        missing = [name for name in required if name not in columns]
+        if missing:
+            print(
+                "AVISO: no se pudieron detallar los ajustes; faltan columnas: "
+                + ", ".join(missing)
+            )
+            return 0
+
+        pending = []
+        for row in range(2, ws.max_row + 1):
+            kind = str(ws.cell(row, columns["Tipo"]).value or "").strip().upper()
+            if kind == "AJUSTE PENDIENTE":
+                pending.append(row)
+
+        print()
+        print("=" * 72)
+        print(f"REVISIÓN DE CAJA — AJUSTES PENDIENTES: {len(pending)}")
+        print("Estos movimientos quedan fuera del saldo hasta que se concilien.")
+        print("=" * 72)
+        if not pending:
+            print("No hay ajustes pendientes en el libro generado.")
+            return 0
+
+        for index, row in enumerate(pending, start=1):
+            def value(header: str):
+                return ws.cell(row, columns[header]).value
+
+            print()
+            print(
+                f"[{index}] Fila {row} | Fecha: {value('Fecha')} | "
+                f"Referencia: {value('ReferenciaVenta') or '(sin referencia)'}"
+            )
+            print(
+                f"    Origen: {value('Origen')} | "
+                f"Ingreso: {value('Ingreso')} | Egreso: {value('Egreso')} | "
+                f"Importe original: {value('Importe original')}"
+            )
+            print(f"    Concepto: {value('Concepto') or '(sin concepto)'}")
+            print(f"    Observación: {value('Observación / ajuste') or '(sin observación)'}")
+        print()
+        print("Fin del detalle. El archivo de entrada no fue modificado.")
+        return len(pending)
+    finally:
+        workbook.close()
+
 def create_verified_backup(source: Path) -> Path:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -143,6 +207,8 @@ def run_build(source: Path, apply_result: bool) -> int:
             print("ERROR: no se generó el XLSX temporal validado o su archivo de estado.")
             print("El libro de entrada no fue reemplazado.")
             return 1
+
+        pending_adjustments = report_pending_adjustments(staged_master)
 
         new_hash = sha256_file(staged_master)
         if sha256_file(source) != original_hash:
